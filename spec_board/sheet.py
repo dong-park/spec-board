@@ -267,6 +267,7 @@ def save_node_user(ticket: Path, key: str, patch: dict, base: dict | None) -> di
 
 
 def save_ticket_user(ticket: Path, patch: dict, base: dict | None) -> dict:
+    ensure_ticket_ignored(ticket)   # 이 파일이 처음 생기기 전에 제외해 둔다
     return save_extra(ticket, ticket_file(ticket), {}, TICKET_USER_KEYS,
                       {"priority": "", "paused": False, "archived": False}, clean_ticket_user(patch), base)
 
@@ -814,10 +815,38 @@ def sheet_dir(arg: str) -> Path:
     return p
 
 
+IGNORE_LINE = "spec/**/ticket.json"
+
+
+def ensure_ticket_ignored(where: Path) -> None:
+    """ticket.json은 보드에서 사람이 바꾸는 로컬 설정(우선순위·멈춤·보관)이라 저장소에 올리지 않는다.
+    커밋되지 않는 .git/info/exclude에 한 줄 넣는다 — 팀의 .gitignore는 건드리지 않고, 워크트리도 같이 덮는다.
+    이미 .gitignore 등으로 가려져 있거나 ticket.json을 추적 중인 레포는 그 레포의 선택이라 넣지 않는다. 실패해도 조용히 넘어간다."""
+    def git(*args: str):
+        return subprocess.run(["git", "-C", str(where), *args], capture_output=True, text=True, timeout=5)
+    try:
+        if git("rev-parse", "--show-toplevel").returncode:
+            return
+        if git("check-ignore", "-q", "spec/x/ticket.json").returncode == 0:
+            return
+        if any(l.endswith("ticket.json") for l in git("ls-files", "--", "spec").stdout.splitlines()):
+            return
+        exclude = Path(git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude").stdout.strip())
+        lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.exists() else []
+        if IGNORE_LINE in lines:
+            return
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as f:
+            f.write(("" if not lines or lines[-1] == "" else "\n") + "# spec-board: 보드에서 바꾸는 로컬 설정\n" + IGNORE_LINE + "\n")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return
+
+
 def register_root(root: Path) -> None:
     """서버가 모르는 레포면 CONF에 한 줄 적는다. 서버는 5초마다 CONF를 다시 읽는다.
     link가 준 주소가 바로 열리게."""
     root = root.resolve()
+    ensure_ticket_ignored(root)
     known: list[Path] = []
     if CONF.exists():
         known += [Path(l.strip()).expanduser() for l in CONF.read_text().splitlines() if l.strip() and not l.startswith("#")]
@@ -912,6 +941,8 @@ def main() -> int:
             repos.append(Path(args[i]).expanduser().resolve()); i += 1
     reg = Registry(repos)
     roots = reg.roots()
+    for p in roots.values():
+        ensure_ticket_ignored(p)
     print(f"워크스페이스 {len(roots)}개", *[f"  /w/{k}/  {p}  시트 {len(find_sheets(p))}" for k, p in roots.items()], sep="\n")
     srv = BoardServer((host, port), make_handler(reg, load_allowed_hosts(extra_hosts)))   # 포트를 연 뒤에 주소를 알린다
     print(f"http://{host}:{port}/", flush=True)

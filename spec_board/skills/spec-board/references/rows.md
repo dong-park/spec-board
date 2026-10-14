@@ -30,7 +30,7 @@
 | kind | 파일 | 사람 칸 | 반영 |
 |---|---|---|---|
 | `node` | `rows/nodes/<노드 key>.json` | `user.verdict`(`통과`·`고쳐줘`) · `user.fix` | `spec-board node verdict <브리프>`가 브리프에 반영하고 칸을 비운다 |
-| `ticket` | `ticket.json` | `user.priority` · `user.paused` · `user.archived` | **서 있는 설정**이다. `ack`가 비우지 않는다(`_standing`). `paused: true`면 그 티켓은 띄우지 않는다. `archived: true`는 화면에서만 치운다(목록·Inbox 숫자에서 뺌) |
+| `ticket` | `ticket.json` | `user.priority` · `user.paused` · `user.archived` | **서 있는 설정**이다. `ack`가 비우지 않는다(`_standing`). `paused: true`면 그 티켓은 띄우지 않는다. `archived: true`는 화면에서만 치운다(목록·Inbox 숫자에서 뺌). **ticket.json은 이 기기의 로컬 설정이라 저장소에 올리지 않는다** — 보드가 레포의 `.git/info/exclude`에 `spec/**/ticket.json` 한 줄을 넣는다(커밋되지 않고 워크트리도 덮는다. 이미 추적하거나 .gitignore로 가린 레포는 건드리지 않는다) |
 
 노드 반영 규칙 — 한 번만 반영하고, 다시 불러도 아무것도 안 한다.
 
