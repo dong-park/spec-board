@@ -1,0 +1,45 @@
+/* 티켓 모달 — 값은 전부 tokens.css 토큰이다. 색·반지름을 직접 적지 않고 accent도 읽지 않는다.
+   주 버튼은 board.css의 .btn-primary를 그대로 쓴다. 테두리 없이 떠 있는 면(.surface)이다. */
+.tm-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: var(--card-gap); background: rgba(0, 0, 0, 0.28); }
+.tm-box { --knock: var(--card); width: min(860px, 100%); max-height: 84vh; display: flex; flex-direction: column; overflow: hidden; }
+.tm-top { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; flex: none; color: var(--text-3); font-size: var(--fs-sm); }
+.tm-crumb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-sep { color: var(--text-faint); }
+.tm-mono { font-family: var(--font-mono); }
+.tm-x { border: 0; background: none; color: var(--text-3); font: inherit; width: 24px; height: 24px; border-radius: 6px; cursor: pointer; }
+.tm-x:hover { background: var(--hover); }
+.tm-body { display: flex; min-height: 0; flex: 1; }
+.tm-main { flex: 1; min-width: 0; overflow: auto; padding: 4px 24px 24px; }
+.tm-side { width: 220px; flex: none; padding: 8px 20px 24px 16px; }
+.tm-h1 { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; font-size: var(--fs-2xl); font-weight: 600; color: var(--text-1); }
+.tm-flag { font-size: var(--fs-sm); font-weight: 500; padding: 0 6px; border-radius: 6px; background: var(--chip); color: var(--st-warn); }
+.tm-h { display: flex; align-items: baseline; gap: 6px; margin: 20px 0 8px; font-size: var(--fs-sm); font-weight: 500; color: var(--text-3); }
+.tm-cnt { font-family: var(--font-mono); color: var(--text-2); }
+.tm-p { margin: 0; font-size: var(--fs-xl); color: var(--text-1); word-break: keep-all; overflow-wrap: break-word; }
+.tm-dim { color: var(--text-3); font-size: var(--fs-lg); margin: 0; }
+.tm-err { color: var(--st-err); margin: 8px 0 0; }
+.tm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tm-sc, .tm-nd, .tm-dc { display: flex; align-items: flex-start; gap: 10px; min-height: 30px; padding: 6px 8px; border-radius: 6px; }
+.tm-sc:hover, .tm-nd:hover, .tm-dc:hover { background: var(--hover); }
+.tm-sc .st, .tm-nd .st, .tm-dc .st { flex: none; margin-top: 3px; }
+.tm-rid { flex: none; min-width: 34px; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-3); margin-top: 2px; }
+.tm-gwt, .tm-nt { flex: 1; min-width: 0; word-break: keep-all; overflow-wrap: break-word; color: var(--text-1); }
+.tm-gwt i { font-style: normal; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-3); }
+.tm-sc.is-pass .tm-gwt { color: var(--text-2); }
+.tm-end { flex: none; display: flex; gap: 4px; margin-top: 2px; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.tm-own { padding: 0 6px; border-radius: 6px; background: var(--chip); color: var(--text-2); }
+.tm-none { color: var(--st-err); font-family: var(--font-ui); }
+.tm-pp { display: flex; align-items: center; gap: 12px; min-height: 30px; font-size: var(--fs-lg); }
+.tm-pp .k { width: 64px; flex: none; color: var(--text-3); }
+.tm-pp .v { color: var(--text-1); min-width: 0; overflow-wrap: anywhere; }
+.tm-doc summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-lg); padding: 4px 0; }
+.tm-pre { margin: 8px 0 0; padding: 12px 14px; max-height: 320px; overflow: auto; border-radius: 10px; background: var(--card-2); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tm-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; padding: 12px 16px; }
+.tm-msg { flex: 1; color: var(--text-3); font-size: var(--fs-sm); }
+.tm-btn { height: 30px; padding: 0 14px; border: 0; border-radius: 6px; font: inherit; font-weight: 500; background: var(--chip); color: var(--text-1); cursor: pointer; }
+.tm-btn:hover { background: var(--active); }
+.tm-btn[aria-pressed="true"] { color: var(--st-warn); }
+.tm-box :focus-visible { outline: 2px solid var(--text-2); outline-offset: 2px; }
+.gh[data-ticket] { cursor: pointer; }
+.gh[data-ticket]:hover { color: var(--text-1); }
+@media (max-width: 640px) { .tm-side { display: none; } .tm-main { padding: 4px 16px 16px; } }

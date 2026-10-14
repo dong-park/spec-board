@@ -1,0 +1,95 @@
+/* 보드 토큰 — 데스크톱 앱의 tokens.css 값을 따른다 (그쪽이 정본, 여기는 읽기용 사본).
+   보드는 앱 설정이 아니라 시스템 라이트·다크를 따르므로 data-theme 대신 prefers-color-scheme을 쓴다.
+   두 층뿐이다: --bg(점 격자 배경면) 위에 --card가 뜨고, 카드 위의 카드는 --card-2다.
+   층은 테두리가 아니라 --shadow-card로 구분한다. */
+:root {
+  color-scheme: light dark;
+
+  --bg: #ECE9E0;
+  --dot: rgba(80, 76, 62, 0.10);
+  --dot-gap: 22px;
+  --card: #FBF9F4;
+  --card-2: #F2EFE7;
+  --text-1: #2A2822;
+  --text-2: #5A574E;
+  --text-3: #8A877E;
+  --text-faint: #B6B2A6;
+  --shadow-card: 0 1px 2px rgba(60, 56, 44, 0.06), 0 10px 30px rgba(60, 56, 44, 0.08);
+  --card-radius: 18px;
+  --card-gap: 12px;
+  --hover: rgba(0, 0, 0, 0.03);
+  --active: rgba(0, 0, 0, 0.06);
+  --chip: rgba(0, 0, 0, 0.04);
+
+  /* accent는 결정 배지와 주 버튼 두 자리에만 쓴다 (board.css에서 두 클래스만 읽는다). */
+  --accent: #3C6E96;
+  --on-accent: #ffffff;
+
+  --st-notify: #4F5D6B;
+  --st-running: #3F7A5E;
+  --st-warn: #9A5E22;
+  --st-err: #A8425A;
+
+  /* 티켓 색 점 — 상태색과 겹치지 않게 앱의 원격지 묶음 색(눌린 톤) 넷과 보조 둘 */
+  --tk-1: #8a6d34;
+  --tk-2: #8f5a3c;
+  --tk-3: #6b5a80;
+  --tk-4: #3f6e6a;
+  --tk-5: #4F5D6B;
+  --tk-6: #3E7691;
+
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", system-ui, sans-serif;
+  --font-mono: "Zed Plex Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  /* 글자는 11·13·15·20 네 단뿐이다 */
+  --fs-sm: 11px;
+  --fs-lg: 13px;
+  --fs-xl: 15px;
+  --fs-2xl: 20px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #414138;
+    --dot: rgba(240, 238, 225, 0.10);
+    --card: #2a2a27;
+    --card-2: #34352d;
+    --text-1: #e8e6dc;
+    --text-2: #a3a196;
+    --text-3: #77756a;
+    --text-faint: #5f5d54;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.30), 0 10px 30px rgba(0, 0, 0, 0.28);
+    --hover: rgba(255, 255, 255, 0.04);
+    --active: rgba(255, 255, 255, 0.08);
+    --chip: rgba(255, 255, 255, 0.06);
+
+    --accent: #f0d48a;
+    --on-accent: #2a2a27;
+
+    --st-notify: #8fa8c0;
+    --st-running: #7fa08a;
+    --st-warn: #d98a4e;
+    --st-err: #d0808e;
+
+    --tk-1: #c4ad7c;
+    --tk-2: #b98a6e;
+    --tk-3: #a593b3;
+    --tk-4: #7fa3a0;
+    --tk-5: #8fa8c0;
+    --tk-6: #5B96B5;
+  }
+}
+
+/* 점 격자 배경 — 아래층. 한 곳에만 그린다. */
+.dots {
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: var(--dot-gap) var(--dot-gap);
+}
+
+/* 떠 있는 면 — 반지름·그림자·배경을 이 클래스 하나가 갖는다. 테두리 없음. */
+.surface {
+  background: var(--card);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-card);
+  border: 0;
+}
