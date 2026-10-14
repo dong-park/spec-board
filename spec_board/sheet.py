@@ -267,7 +267,7 @@ def save_node_user(ticket: Path, key: str, patch: dict, base: dict | None) -> di
 
 
 def save_ticket_user(ticket: Path, patch: dict, base: dict | None) -> dict:
-    ensure_ticket_ignored(ticket)   # 이 파일이 처음 생기기 전에 제외해 둔다
+    ensure_local_ignored(ticket)   # 이 파일이 처음 생기기 전에 제외해 둔다
     return save_extra(ticket, ticket_file(ticket), {}, TICKET_USER_KEYS,
                       {"priority": "", "paused": False, "archived": False}, clean_ticket_user(patch), base)
 
@@ -815,29 +815,51 @@ def sheet_dir(arg: str) -> Path:
     return p
 
 
-IGNORE_LINE = "spec/**/ticket.json"
+# 보드·에이전트가 spec/ 아래에 만드는 파일 가운데 저장소에 올릴 것이 아닌 것. (제외 줄, 예시 경로, 사람 칸 파일인가)
+#  - 사람 칸(state): 보드에서 사람이 바꾸는 이 기기의 설정. 레포가 이미 추적 중이면 그 레포의 선택이라 건드리지 않는다.
+#  - 실행 중 임시(runtime): 잠금·에이전트 id·선행 리포트·쓰기 임시. 어떤 레포든 올릴 이유가 없다.
+LOCAL_FILES = [
+    ("spec/**/ticket.json", "spec/x/ticket.json", True),
+    ("spec/**/rows/nodes/", "spec/x/rows/nodes/n1.json", True),
+    ("spec/**/*.md.lock", "spec/x/n1-a.md.lock", False),
+    ("spec/**/*.md.agent", "spec/x/n1-a.md.agent", False),
+    ("spec/**/.wave", "spec/x/.wave", False),
+    ("spec/**/rows/.lock", "spec/x/rows/.lock", False),
+    ("spec/**/*.report.md", "spec/x/n1-a.report.md", False),
+    ("spec/**/.tmp-*", "spec/x/rows/.tmp-1.json", False),
+]
 
 
-def ensure_ticket_ignored(where: Path) -> None:
-    """ticket.json은 보드에서 사람이 바꾸는 로컬 설정(우선순위·멈춤·보관)이라 저장소에 올리지 않는다.
-    커밋되지 않는 .git/info/exclude에 한 줄 넣는다 — 팀의 .gitignore는 건드리지 않고, 워크트리도 같이 덮는다.
-    이미 .gitignore 등으로 가려져 있거나 ticket.json을 추적 중인 레포는 그 레포의 선택이라 넣지 않는다. 실패해도 조용히 넘어간다."""
+def _tracked_matches(line: str, tracked: list[str]) -> bool:
+    """이 제외 줄이 가리키는 파일 가운데 이미 추적 중인 것이 있는가."""
+    rx = re.escape(line.rstrip("/")).replace(r"\*\*/", "(?:.*/)?").replace(r"\*", "[^/]*")
+    return any(re.fullmatch(rx + ("/.*" if line.endswith("/") else ""), f) for f in tracked)
+
+
+def ensure_local_ignored(where: Path) -> None:
+    """보드가 만드는 로컬 파일이 레포에 미추적으로 쌓이지 않게 한다 — 커밋되지 않는 .git/info/exclude에 줄을 넣는다.
+    팀의 .gitignore는 건드리지 않고 워크트리도 같이 덮는다. 이미 가려져 있는 줄은 넣지 않고, 사람 칸 파일은 레포가
+    이미 추적 중이면 넣지 않는다. 이미 추적 중인 파일을 빼 주지는 않는다(git rm은 레포 주인이 정한다). 실패해도 조용히 넘어간다."""
     def git(*args: str):
         return subprocess.run(["git", "-C", str(where), *args], capture_output=True, text=True, timeout=5)
     try:
         if git("rev-parse", "--show-toplevel").returncode:
             return
-        if git("check-ignore", "-q", "spec/x/ticket.json").returncode == 0:
-            return
-        if any(l.endswith("ticket.json") for l in git("ls-files", "--", "spec").stdout.splitlines()):
-            return
+        tracked = git("ls-files", "--", "spec").stdout.splitlines()
         exclude = Path(git("rev-parse", "--path-format=absolute", "--git-path", "info/exclude").stdout.strip())
-        lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.exists() else []
-        if IGNORE_LINE in lines:
+        have = exclude.read_text(encoding="utf-8").splitlines() if exclude.exists() else []
+        add = []
+        for line, sample, state in LOCAL_FILES:
+            if line in have or git("check-ignore", "-q", sample).returncode == 0:
+                continue
+            if state and _tracked_matches(line, tracked):
+                continue
+            add.append(line)
+        if not add:
             return
         exclude.parent.mkdir(parents=True, exist_ok=True)
         with exclude.open("a", encoding="utf-8") as f:
-            f.write(("" if not lines or lines[-1] == "" else "\n") + "# spec-board: 보드에서 바꾸는 로컬 설정\n" + IGNORE_LINE + "\n")
+            f.write(("" if not have or have[-1] == "" else "\n") + "# spec-board: 보드·에이전트가 만드는 로컬 파일\n" + "\n".join(add) + "\n")
     except (OSError, subprocess.SubprocessError, ValueError):
         return
 
@@ -846,7 +868,7 @@ def register_root(root: Path) -> None:
     """서버가 모르는 레포면 CONF에 한 줄 적는다. 서버는 5초마다 CONF를 다시 읽는다.
     link가 준 주소가 바로 열리게."""
     root = root.resolve()
-    ensure_ticket_ignored(root)
+    ensure_local_ignored(root)
     known: list[Path] = []
     if CONF.exists():
         known += [Path(l.strip()).expanduser() for l in CONF.read_text().splitlines() if l.strip() and not l.startswith("#")]
@@ -942,7 +964,7 @@ def main() -> int:
     reg = Registry(repos)
     roots = reg.roots()
     for p in roots.values():
-        ensure_ticket_ignored(p)
+        ensure_local_ignored(p)
     print(f"워크스페이스 {len(roots)}개", *[f"  /w/{k}/  {p}  시트 {len(find_sheets(p))}" for k, p in roots.items()], sep="\n")
     srv = BoardServer((host, port), make_handler(reg, load_allowed_hosts(extra_hosts)))   # 포트를 연 뒤에 주소를 알린다
     print(f"http://{host}:{port}/", flush=True)
