@@ -13,6 +13,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "spec_board"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _store  # noqa: F401  사람 칸 저장소를 임시 폴더로
 
 import node_state
 import sheet
@@ -39,7 +41,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.ticket = Path(self.tmp.name) / "spec" / "s"
-        (self.ticket / "rows" / "nodes").mkdir(parents=True)
+        (self.ticket / "rows").mkdir(parents=True)
         self.brief = self.ticket / "n7-demo.md"
         self.journal = mock.patch.object(sheet, "JOURNAL", Path(self.tmp.name) / "journal")
         self.journal.start()
@@ -52,7 +54,8 @@ class Base(unittest.TestCase):
         self.brief.write_text(BRIEF.format(state=state, tail=tail), encoding="utf-8")
 
     def node(self, verdict="", fix="", key="n7", log=None):
-        f = self.ticket / "rows" / "nodes" / f"{key}.json"
+        f = sheet.node_file(self.ticket, key)
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps({"id": key, "user": {"verdict": verdict, "fix": fix}, **({"log": log} if log else {})},
                                 ensure_ascii=False), encoding="utf-8")
         return f
@@ -63,13 +66,14 @@ class Base(unittest.TestCase):
             "user": {"answer": answer, "fix": fix}, "log": []}, ensure_ascii=False), encoding="utf-8")
 
     def ticket_json(self, **user):
-        (self.ticket / "ticket.json").write_text(json.dumps({"user": {"priority": "", "paused": False, **user}}), encoding="utf-8")
+        sheet.ticket_file(self.ticket).parent.mkdir(parents=True, exist_ok=True)
+        sheet.ticket_file(self.ticket).write_text(json.dumps({"user": {"priority": "", "paused": False, **user}}), encoding="utf-8")
 
     def status(self):
         return node_state.read_status(self.brief.read_text(encoding="utf-8"))
 
     def cell(self, key="n7"):
-        return json.loads((self.ticket / "rows" / "nodes" / f"{key}.json").read_text())
+        return json.loads(sheet.node_file(self.ticket, key).read_text())
 
 
 class ApplyTest(Base):
@@ -107,7 +111,8 @@ class ApplyTest(Base):
     def test_tmp_files_left_by_atomic_writes_are_ignored(self):
         self.row("D1", answer="A")
         (self.ticket / "rows" / ".tmp-abc.json").write_text("{not json")
-        (self.ticket / "rows" / "nodes" / ".tmp-xyz.json").write_text("{not json")
+        sheet.node_file(self.ticket, "n7").parent.mkdir(parents=True, exist_ok=True)
+        (sheet.node_file(self.ticket, "n7").parent / ".tmp-xyz.json").write_text("{not json")
         self.assertEqual([x["id"] for x in sheet.apply_sheet(self.ticket)], ["D1"])
 
 
@@ -137,7 +142,7 @@ class AckTest(Base):
         seen = sheet.apply_sheet(self.ticket)[0]["user"]
         r = sheet.patch_row(self.ticket, "ticket", {"ack": seen, "log+": "2026-10-11 paused 확인"})
         self.assertTrue(r["_standing"])
-        u = json.loads((self.ticket / "ticket.json").read_text())["user"]
+        u = json.loads(sheet.ticket_file(self.ticket).read_text())["user"]
         self.assertEqual(u, {"priority": "P0", "paused": True})
         self.assertEqual([x["id"] for x in sheet.apply_sheet(self.ticket)], ["ticket"])   # 다음 턴에도 그대로 나온다
 
@@ -192,10 +197,10 @@ class VerdictTest(Base):
         self.assertEqual(self.cell()["user"], {"verdict": "", "fix": ""})
         self.assertIn("2026-10-11 user.verdict 반영: 통과", self.cell()["log"])
         # 두 번째는 아무것도 안 한다
-        before = (self.brief.read_text(), (self.ticket / "rows/nodes/n7.json").read_text())
+        before = (self.brief.read_text(), sheet.node_file(self.ticket, "n7").read_text())
         r2 = node_state.verdict(self.brief, today="2026-10-12")
         self.assertFalse(r2["applied"])
-        self.assertEqual(before, (self.brief.read_text(), (self.ticket / "rows/nodes/n7.json").read_text()))
+        self.assertEqual(before, (self.brief.read_text(), sheet.node_file(self.ticket, "n7").read_text()))
 
     def test_status_line_comment_is_kept(self):
         self.write_brief("확인 대기")
@@ -361,7 +366,7 @@ class VerdictTest(Base):
         t.join()
         self.assertEqual(errs, [])
         self.assertTrue(r["applied"])
-        json.loads((self.ticket / "rows/nodes/n7.json").read_text())   # 깨지지 않았다
+        json.loads(sheet.node_file(self.ticket, "n7").read_text())   # 깨지지 않았다
 
 
 if __name__ == "__main__":

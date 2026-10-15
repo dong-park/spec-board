@@ -12,6 +12,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "spec_board"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _store  # noqa: F401  사람 칸 저장소를 임시 폴더로
 
 import node_state
 import sheet

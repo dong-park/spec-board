@@ -315,6 +315,7 @@ const hasPython = spawnSync('python3', ['--version']).status === 0;
 const free = () => new Promise((res) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 
 const tmp = mkdtempSync(join(tmpdir(), 'dectest-'));
+const STORE = mkdtempSync(join(tmpdir(), 'spec-board-store-'));   // 사람 칸 저장소도 임시로 — 진짜 ~/.local/share/spec-board를 건드리지 않게
 let server;
 after(() => { if (server) server.kill(); rmSync(tmp, { recursive: true, force: true }); });
 
@@ -337,7 +338,7 @@ function seedRepo() {
 test('실경로: 실제 서버에서 B로 답하면 파일에 user.answer만 쓰이고 막는 묶음에서 빠진다', { skip: !hasPython }, async () => {
   const ticket = seedRepo();
   const port = await free();
-  server = spawn('python3', [join(here, '..', 'sheet.py'), '--port', String(port), tmp], { stdio: ['ignore', 'pipe', 'pipe'] });
+  server = spawn('python3', [join(here, '..', 'sheet.py'), '--port', String(port), tmp], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, SPEC_BOARD_STORE: STORE } });
   await new Promise((res, rej) => {
     const t = setTimeout(() => rej(new Error('서버가 안 떴다')), 8000);
     server.stdout.on('data', (b) => { if (String(b).includes(`http://127.0.0.1:${port}/`)) { clearTimeout(t); res(); } });

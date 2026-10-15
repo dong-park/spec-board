@@ -16,6 +16,8 @@ from pathlib import Path
 
 os.environ.setdefault("SPEC_SHEET_HOSTS", "box.example.ts.net")   # 원격(tailnet) 접근 시험용 가짜 이름
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "spec_board"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _store  # noqa: F401  사람 칸 저장소를 임시 폴더로
 
 import sheet
 from test_spec_model import Repo, Tmp

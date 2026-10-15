@@ -30,8 +30,11 @@
   const hasRec = (d) => !!optOf(d, d.recommend);
   const keyOf = (d) => `${d.ticket || ''}|${d.id}`;
   const tail = (s) => String(s || '').split('/').filter(Boolean).pop() || '';
+  // 같은 시트인가 — 모든 레포를 모은 모델(/api/inbox)에서는 워크트리끼리 시트 이름이 겹칠 수 있어 워크스페이스까지 본다.
+  // ws가 없으면(한 워크스페이스 모델·옛 호출) 시트 이름만 본다.
+  const sameTicket = (t, slug, ws) => t.slug === slug && (!ws || !t.workspace || t.workspace === ws);
 
-  /* 결정 한 줄 목록. 서버는 복제본을 안 준다 — 티켓 rows의 결정 행을 그대로(같은 객체) 모아 ticket·project를 붙인다.
+  /* 결정 한 줄 목록. 서버는 복제본을 안 준다 — 티켓 rows의 결정 행을 그대로(같은 객체) 모아 ticket·project·workspace를 붙인다.
      같은 객체라 로컬에서 답을 바꾸면 한 곳만 고치면 된다. 순서는 프로젝트 → 티켓 → 행이다. */
   function list(model) {
     const out = [];
@@ -42,6 +45,8 @@
           if (!r || r.kind !== 'decision') continue;
           r.ticket = t.slug;
           r.project = p.key;
+          r.workspace = t.workspace || (model && model.workspace) || '';
+          r.repo = t.repo || '';
           out.push(r);
         }
       }
@@ -68,11 +73,11 @@
   const blockingCount = (decisions) => (Array.isArray(decisions) ? decisions : []).filter(isBlocking).length;
 
   // 로컬에서 답을 바꾼 뒤 사이드바 숫자를 다시 맞춘다. 결정 행은 티켓 rows에 한 벌뿐이다.
-  function applyUser(model, ticket, id, user) {
+  function applyUser(model, ticket, id, user, ws) {
     if (!model) return;
     for (const p of model.projects || []) {
       for (const t of p.tickets || []) {
-        if (t.slug !== ticket) continue;
+        if (!sameTicket(t, ticket, ws)) continue;
         for (const r of t.rows || []) {
           if (!r || String(r.id) !== String(id) || r.kind !== 'decision') continue;
           r.user = { ...(r.user || {}), ...user };
@@ -86,11 +91,14 @@
     s.decisions_blocking = blockingCount(all);
   }
 
-  function find(model, ticket, display) {
-    const all = list(model);
+  function find(model, ticket, display, ws) {
+    const all = list(model).filter((d) => !ws || !d.workspace || d.workspace === ws);
     return all.find((d) => d.display_id === display && (!ticket || d.ticket === ticket))
       || all.find((d) => d.display_id === display) || null;
   }
+
+  // 모든 레포 화면에서 줄이 어디서 왔는지 — 워크스페이스 키(같은 레포의 워크트리도 구분된다)
+  const whereOf = (d) => (d.workspace ? `<span class="where">${esc(d.workspace)}</span>` : '');
 
   /* ── 결정 메뉴 ─────────────────────────────────────── */
 
@@ -123,20 +131,24 @@
     return ops.join('');
   }
 
-  function row(d, g) {
-    return `<div class="drow is-${g.cls}" role="button" tabindex="0" data-dec="${esc(d.display_id)}" data-ticket="${esc(d.ticket)}">` +
+  function row(d, g, global, short) {
+    const id = short ? String(d.display_id || '').split('-').pop() : d.display_id; // 시트 안에서는 시트 머리를 뺀 D1
+    return `<div class="drow is-${g.cls}" role="button" tabindex="0" data-dec="${esc(d.display_id)}" data-ticket="${esc(d.ticket)}" data-dec-ws="${esc(d.workspace || '')}">` +
       icon(g.icon, 'st st-' + g.cls) +
-      `<span class="id">${esc(d.display_id)}</span>` +
+      `<span class="id" title="${esc(d.display_id)}">${esc(id)}</span>` +
       `<div class="ti"><b>${esc(d.title)}</b><div class="m">${esc(metaOf(d))}</div></div>` +
-      `<div class="ops">${opsOf(d)}</div></div>`;
+      `<div class="ops">${opsOf(d)}</div>${global ? whereOf(d) : ''}</div>`;
   }
 
-  function menu(model) {
+  // opts.short — 한 시트만 보일 때(시트의 결정 탭) ID를 줄인다
+  function menu(model, opts) {
     const gs = groups(list(model));
+    const global = !!(model && model.global);
+    const short = !!(opts && opts.short);
     let h = '<div class="dlist">';
     for (const g of gs) {
       h += `<h2 class="dgh" data-group="${g.key}">${icon(g.icon, 'st st-' + g.cls)}${esc(g.label)} <span class="n">${g.items.length}</span></h2>`;
-      h += g.items.map((d) => row(d, g)).join('');
+      h += g.items.map((d) => row(d, g, global, short)).join('');
     }
     return h + '</div>';
   }
@@ -151,7 +163,7 @@
     const slug = d.ticket;
     let nodes = [];
     for (const p of (model && model.projects) || []) {
-      for (const t of p.tickets || []) if (t.slug === slug) nodes = t.nodes || [];
+      for (const t of p.tickets || []) if (sameTicket(t, slug, d.workspace)) nodes = t.nodes || [];
     }
     return keys.map((k) => {
       const n = nodes.find((x) => x.key === k) || { key: k, id: k, title: '' };
@@ -212,7 +224,7 @@
         `<button class="btn-primary" type="button" data-dec-submit${st.can ? '' : ' disabled'}>${st.busy ? '저장 중…' : '답하기'}</button>`
       : '<span class="kb">끝난 결정이에요</span>';
 
-    const project = d.project ? `${esc(d.project)} › ` : '';
+    const project = (model && model.global && d.workspace ? `${esc(d.workspace)} › ` : '') + (d.project ? `${esc(d.project)} › ` : '');
     return {
       label: d.title,
       crumb: `${project}${esc(tail(d.ticket))} › <b>${esc(d.display_id)}</b>`,
@@ -232,7 +244,8 @@
     const model = () => opts.getModel() || {};
     const current = () => {
       if (!st.open) return null;
-      return list(model()).find((d) => d.ticket === st.open.ticket && String(d.id) === String(st.open.id)) || null;
+      return list(model()).find((d) => d.ticket === st.open.ticket && String(d.id) === String(st.open.id)
+        && (!st.open.ws || !d.workspace || d.workspace === st.open.ws)) || null;
     };
     const value = () => (st.choice === FREE ? st.text.trim() : st.choice);
 
@@ -252,10 +265,10 @@
         const d = current();
         return !!d && isOpen(d) && !st.busy && value() !== '' && value() !== answerOf(d);
       },
-      open(ticket, display) {
-        const d = find(model(), ticket, display);
+      open(ticket, display, ws) {
+        const d = find(model(), ticket, display, ws);
         if (!d) return false;
-        st.open = { ticket: d.ticket, id: d.id };
+        st.open = { ticket: d.ticket, id: d.id, ws: d.workspace || '' };
         st.busy = false; st.notice = ''; st.focusText = false;
         seed(d);
         change();
@@ -291,7 +304,7 @@
         if (!d || !isOpen(d) || st.busy) return { ok: false, reason: 'closed' };
         const v = value();
         if (!v) return { ok: false, reason: 'empty' };
-        const ws = model().workspace;
+        const ws = d.workspace || model().workspace; // 모든 레포 화면이면 그 줄의 레포에 쓴다
         if (!ws) { st.notice = MSG_FAILED; change(); return { ok: false, reason: 'no-workspace' }; }
         st.busy = true; st.notice = '';
         change();
@@ -302,7 +315,7 @@
         st.busy = false;
         const j = (res && res.json) || {};
         if (res && res.status === 200 && j.ok) {
-          applyUser(model(), d.ticket, d.id, j.user || { answer: v });
+          applyUser(model(), d.ticket, d.id, j.user || { answer: v }, ws);
           st.open = null; st.notice = '';
           change();
           if (opts.onSaved) opts.onSaved();
@@ -310,7 +323,7 @@
         }
         if (res && res.status === 409) {
           // 다른 곳에서 먼저 바뀌었다 — 서버 값을 받아 보여 주고, 사용자가 다시 고르게 한다
-          if (j.user) applyUser(model(), d.ticket, d.id, j.user);
+          if (j.user) applyUser(model(), d.ticket, d.id, j.user, ws);
           const fresh = current();
           if (fresh) seed(fresh);
           st.notice = `${MSG_CONFLICT}. 지금 값으로 다시 보여 드려요`;
@@ -327,7 +340,7 @@
   }
 
   return {
-    esc, FREE, MSG_CONFLICT, MSG_FAILED, answerOf, isOpen, isBlocking, list, groups, blockingCount,
-    applyUser, find, row, menu, modalParts, controller, keyOf, metaOf,
+    esc, FREE, MSG_CONFLICT, MSG_FAILED, answerOf, isOpen, isBlocking, hasRec, list, groups, blockingCount,
+    applyUser, find, row, menu, modalParts, controller, keyOf, metaOf, sameTicket,
   };
 });

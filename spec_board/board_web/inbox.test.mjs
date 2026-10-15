@@ -73,12 +73,12 @@ const nav = (html) => html.replace(/<svg class="sprite"[\s\S]*?<\/defs><\/svg>/,
 test('목록은 열린 결정과 확인 대기 노드이고 사이드바 Inbox 숫자와 같다', () => {
   const m = MODEL();
   const it = I.items(m);
-  assert.deepEqual(it.decisions.map((x) => x.d.id), ['D1', 'D2', 'D3'], '막는 결정 → 답 없음 → 답함(반영 대기)');
-  assert.deepEqual(it.decisions.map((x) => x.blocking), [true, false, false]);
-  assert.deepEqual(it.checks.map((x) => x.n.key), ['n2', 'n1'], '아직 안 누른 줄이 먼저');
-  assert.equal(I.count(m), m.summary.decisions_open + m.summary.to_check);
+  assert.deepEqual(it.decisions.map((x) => x.d.id), ['D1', 'D2'], '막는 결정 → 답 없음. 답한 D3은 에이전트 차례라 빠진다');
+  assert.deepEqual(it.decisions.map((x) => x.blocking), [true, false]);
+  assert.deepEqual(it.checks.map((x) => x.n.key), ['n2'], '통과를 남긴 n1은 빠진다');
+  assert.equal(I.count(m), 3);
   const side = V.sidebar(m, { view: 'inbox' });
-  assert.match(side, /Inbox<\/span><span class="c">5<\/span>/);
+  assert.match(side, /Inbox<\/span><span class="c">3<\/span>/, '사이드바 숫자도 같은 셈');
 });
 
 test('끝난 결정·진행·막힘 노드는 Inbox에 없다', () => {
@@ -118,11 +118,11 @@ test('폰 모드 결정 줄에는 선택지 버튼이, 확인 대기 줄에는 �
   assert.match(chk, /근거 2개/);
 });
 
-test('이미 한 답은 눌린 모양이고, 통과를 남긴 줄은 반영 대기로 보인다', () => {
-  const html = I.html(MODEL(), {});
-  assert.match(html, /data-in-dec="WM-D3"[^>]*data-in-key="B"[^>]*aria-pressed="true"[^>]*>✓ B/);
-  assert.match(html, /data-in-key="n1"[\s\S]*?통과 남김 · 반영 대기/);
-  assert.match(html, /data-in-pass[^>]*data-in-key="n1"[^>]*aria-pressed="true"/);
+test('이미 답한 결정·통과를 남긴 확인은 Inbox에서 빠지고, Decisions에서는 답이 보인다', () => {
+  const m = MODEL();
+  const html = I.html(m, {});
+  assert.doesNotMatch(html, /data-in-dec="WM-D3"|data-in-key="n1"/);
+  assert.match(D.menu(m), /data-dec="WM-D3"[\s\S]*?✓ B/, '답을 바꾸려면 Decisions(또는 시트 결정 탭)에서');
 });
 
 test('버튼·줄은 다른 모달이 위임으로 듣는 속성을 달지 않는다 — 누르면 티켓·노드 모달이 같이 열린다', () => {
@@ -131,7 +131,7 @@ test('버튼·줄은 다른 모달이 위임으로 듣는 속성을 달지 않�
   // 결정 모달을 여는 제목(data-dec + data-ticket)만 예외다 — view.js가 그 클릭을 먼저 가져가 전파를 멈춘다
   // 확인 줄 본문(.iopen)은 노드 모달을 여는 곳이라 data-nm-open·data-tkt를 단다 — 버튼에는 달지 않는다
   const rest = html.replace(/<b class="it"[^>]*data-dec=[^>]*>/g, '<b class="it">')
-    .replace(/<div class="iopen" data-nm-open data-tkt="[^"]*" data-key="[^"]*"/g, '<div class="iopen"');
+    .replace(/<div class="iopen" data-nm-open data-tkt="[^"]*" data-key="[^"]*" data-ws="[^"]*"/g, '<div class="iopen"');
   assert.doesNotMatch(rest, /data-ticket=|data-act=|data-nm=|data-tkt=/);
   assert.doesNotMatch(rest, /\sclass="[^"]*\bcard\b/, '.card가 아니다 — 노드 모달이 줄을 카드로 오인하지 않는다');
 });
@@ -142,7 +142,7 @@ test('로컬과 원격 Inbox는 같은 줄을 쓴다', () => {
   const desk = V.stage({ ...m, local: true }, { view: 'inbox' });
   const remote = V.page({ ...m, local: false }, { view: 'inbox' }, {});
   assert.deepEqual(rows(desk), rows(remote));
-  assert.equal(rows(desk).length, 5);
+  assert.equal(rows(desk).length, 3);
 });
 
 // ── 컨트롤러: 쓰는 칸과 요청 수
@@ -197,7 +197,7 @@ test('다른 곳에서 먼저 답했으면 409 안내를 그 줄에 보이고 �
   assert.equal(r.conflict, true);
   assert.equal(D.answerOf(D.list(m).find((d) => d.id === 'D2')), 'A', '서버 값을 받았다');
   const html = I.html(m, { state: t.ctl.view() });
-  assert.match(html, /class="inote is-err"[^>]*>다른 곳에서 먼저 바꿨어요/);
+  assert.match(html, /class="inote is-err"[^>]*>다른 곳에서 먼저 바꿨어요/, '서버 값으로 답이 생겨도 안내가 떠 있는 동안은 줄이 남는다');
   assert.match(html, /data-in-dec="WM-D2"[^>]*data-in-key="A"[^>]*aria-pressed="true"/);
 });
 
@@ -259,6 +259,13 @@ test('고쳐줘 보내기가 409면 입력은 열려 있고 안내가 보인다'
 
 // ── 실경로: 진짜 sheet.py가 /board/로 화면을 내고, tailnet 요청은 폰 Inbox가 되고, 답이 파일에 쓰인다
 const hasPython = spawnSync('python3', ['--version']).status === 0;
+// 사람 칸은 레포 밖 저장소에 있다 — 테스트는 임시 저장소를 쓰고, 파일 경로는 spec_model에게 묻는다
+const STORE = mkdtempSync(join(tmpdir(), 'spec-board-store-'));
+const storeFile = (ticketDir, kind, key) => spawnSync('python3', ['-c',
+  'import sys; sys.path.insert(0, sys.argv[1]); import spec_model as m; from pathlib import Path; t = Path(sys.argv[2]); ' +
+  'print(m.node_file(t, sys.argv[4]) if sys.argv[3] == "node" else m.ticket_file(t))',
+  join(here, '..'), ticketDir, kind, key || ''], { env: { ...process.env, SPEC_BOARD_STORE: STORE }, encoding: 'utf8' }).stdout.trim();
+
 const free = () => new Promise((res) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const tmp = mkdtempSync(join(tmpdir(), 'inboxtest-'));
 let server;
@@ -290,7 +297,7 @@ const getAs = (port, path, host) => new Promise((res, rej) => {
 test('실경로: /board/로 화면이 나가고 tailnet 요청은 폰 Inbox가 되며 답과 통과가 파일에 쓰인다', { skip: !hasPython }, async () => {
   const ticket = seedRepo();
   const port = await free();
-  server = spawn('python3', [join(here, '..', 'sheet.py'), '--port', String(port), tmp], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, SPEC_SHEET_HOSTS: 'box.example.ts.net' } });
+  server = spawn('python3', [join(here, '..', 'sheet.py'), '--port', String(port), tmp], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, SPEC_SHEET_HOSTS: 'box.example.ts.net', SPEC_BOARD_STORE: STORE } });
   await new Promise((res, rej) => {
     const t = setTimeout(() => rej(new Error('서버가 안 떴다')), 8000);
     server.stdout.on('data', (b) => { if (String(b).includes(`http://127.0.0.1:${port}/`)) { clearTimeout(t); res(); } });
@@ -333,15 +340,15 @@ test('실경로: /board/로 화면이 나가고 tailnet 요청은 폰 Inbox가 �
   assert.equal(d1.status, '아직 안 함', '상태 칸은 화면이 쓰지 않는다');
 
   await ctl.pass('g/t', 'n1');
-  const nf = JSON.parse(readFileSync(join(ticket, 'rows', 'nodes', 'n1.json'), 'utf8'));
+  const nf = JSON.parse(readFileSync(storeFile(ticket, 'node', 'n1'), 'utf8'));
   assert.equal(nf.user.verdict, '통과');
   assert.match(readFileSync(join(ticket, 'n1-demo.md'), 'utf8'), /\*\*상태\*\*: 확인 대기/, '브리프 상태는 그대로');
 
-  // 다시 읽은 모델: 같은 줄이 눌린 모양이다
+  // 다시 읽은 모델: 답·통과가 파일에 남아 Inbox에서는 빠지고 Decisions에는 답이 보인다
   const again = JSON.parse((await getAs(port, `/api/board?w=${encodeURIComponent(ws)}`, 'box.example.ts.net:8443')).body);
   const html2 = I.html(again, {});
-  assert.match(html2, /data-in-key="B"[^>]*aria-pressed="true"/);
-  assert.match(html2, /통과 남김 · 반영 대기/);
+  assert.doesNotMatch(html2, /data-in-dec="DM-D1"|data-in-key="n1"/);
+  assert.match(D.menu(again), /data-dec="DM-D1"[\s\S]*?✓ B/);
 });
 
 // ── 확인 카드: 본문 열기 · 썸네일 · 확인할 것 N개
@@ -352,7 +359,7 @@ test('확인 카드: 본문이 노드 모달을 열고, 첫 근거 이미지 썸
   n2.evidence = ['notes.txt', 'b.png', 'c.png'];
   const html = I.html(m, {});
   const chk = html.match(/<div class="irow is-rev" data-in="chk"[^>]*data-in-key="n2">[\s\S]*?(?=<div class="irow|$)/)[0];
-  assert.match(chk, /<div class="iopen" data-nm-open data-tkt="wm\/t" data-key="n2" role="button" tabindex="0">/);
+  assert.match(chk, /<div class="iopen" data-nm-open data-tkt="wm\/t" data-key="n2" data-ws="demo" role="button" tabindex="0">/);
   assert.match(chk, /확인할 것 3개 · 근거 3개/);
   assert.match(chk, /<img class="in-th" src="\/w\/demo\/api\/evidence\?sheet=wm%2Ft&amp;id=n2&amp;name=b\.png"/);
   assert.equal((chk.match(/<img/g) || []).length, 1, '첫 이미지 하나만');
@@ -363,9 +370,11 @@ test('확인 카드: 본문이 노드 모달을 열고, 첫 근거 이미지 썸
 });
 
 test('확인 카드: 확인할 것도 이미지도 없으면 메타·썸네일이 없다', () => {
-  const html = I.html(MODEL(), {});
-  const n1 = html.match(/<div class="irow is-rev" data-in="chk"[^>]*data-in-key="n1">[\s\S]*?(?=<div class="irow|$)/)[0];
-  assert.doesNotMatch(n1, /확인할 것 \d/);
+  const m0 = MODEL();
+  m0.projects[0].tickets[0].nodes.find((x) => x.key === 'n2').evidence = [];
+  const html = I.html(m0, {});
+  const n2 = html.match(/<div class="irow is-rev" data-in="chk"[^>]*data-in-key="n2">[\s\S]*?(?=<div class="irow|$)/)[0];
+  assert.doesNotMatch(n2, /확인할 것 \d|근거|<img/);
   const bare = MODEL();
   delete bare.workspace;
   assert.doesNotMatch(I.html(bare, {}), /<img/, '워크스페이스를 모르면 주소를 못 만든다');
@@ -379,5 +388,109 @@ test('고쳐줘 입력은 여러 줄이고, 줄바꿈 그대로 한 번에 보�
   t.ctl.setDraft('첫 줄\n둘째 줄');
   await t.ctl.sendFix();
   assert.equal(t.calls[0].body.user.fix, '첫 줄\n둘째 줄');
+});
+
+
+
+// ── 모든 레포 Inbox: 워크트리 둘에 같은 시트·같은 결정 id가 있어도 누른 줄의 레포에만 쓴다
+const GLOBAL = () => {
+  const part = (ws) => {
+    const m = MODEL();
+    const p = m.projects[0];
+    p.tickets[0].workspace = ws; p.tickets[0].repo = 'demo';
+    return { ...p, workspace: ws, repo: 'demo' };
+  };
+  return { global: true, workspace: '', projects: [part('demo-a'), part('demo-b')] };
+};
+const rowOf = (g, ws, id) => g.projects.find((p) => p.workspace === ws).tickets[0].rows.find((r) => r.id === id);
+
+test('모든 레포: 같은 시트·결정이 두 워크트리에 있으면 누른 줄의 레포로 쓰고 그 줄만 바뀐다', async () => {
+  const g = GLOBAL();
+  const t = make(g);
+  const h = I.html(g, { state: t.ctl.view() });
+  assert.match(h, /<a class="where" href="\/w\/demo-b\/board\/#s\/wm\/t" data-ws="demo-b" data-hash="#s\/wm\/t"[^>]*>demo-b<\/a>/);
+  const r = await t.ctl.pick('wm/t', 'WM-D2', 'B', 'demo-b');
+  assert.equal(r.ok, true);
+  assert.equal(t.calls.length, 1);
+  assert.equal(t.calls[0].url, '/w/demo-b/api/user');
+  assert.equal(rowOf(g, 'demo-b', 'D2').user.answer, 'B');
+  assert.equal(rowOf(g, 'demo-a', 'D2').user.answer, '', '다른 워크트리의 같은 결정은 그대로');
+
+  await t.ctl.pass('wm/t', 'n2', 'demo-a');
+  assert.equal(t.calls[1].url, '/w/demo-a/api/node');
+  const nodeIn = (ws) => g.projects.find((p) => p.workspace === ws).tickets[0].nodes.find((n) => n.key === 'n2');
+  assert.equal(nodeIn('demo-a').verdict, '통과');
+  assert.equal(nodeIn('demo-b').verdict, '');
+});
+
+test('추천대로 답하기: 되돌리기 쉽고 답 없는 결정만, 그 레포·시트에만 쓴다', async () => {
+  const g = GLOBAL();
+  const rows = g.projects[0].tickets[0].rows;
+  rows.push(dec({ id: 'D5', display_id: 'WM-D5', title: '쉬운 결정 둘', recommend: 'B' }));
+  const t = make(g);
+  const h = I.html(g, { state: t.ctl.view() });
+  // demo-a에는 쉬운 결정이 둘(D2·D5)이라 한 번에 답하는 줄이 있고, 하나뿐인 demo-b에는 없다
+  assert.match(h, /data-in-bulk data-in-ws="demo-a" data-in-ticket="wm\/t"[^>]*>추천대로 2개 답하기/);
+  assert.doesNotMatch(h, /data-in-bulk data-in-ws="demo-b"/);
+  const r = await t.ctl.bulk('wm/t', 'demo-a');
+  assert.deepEqual(r, { ok: true, done: 2 });
+  assert.deepEqual(t.calls.map((c) => [c.url, c.body.id, c.body.user.answer]),
+    [['/w/demo-a/api/user', 'D2', 'A'], ['/w/demo-a/api/user', 'D5', 'B']]);
+  assert.equal(rowOf(g, 'demo-a', 'D1').user.answer, '', '되돌리기 어려운 결정은 건드리지 않는다');
+  assert.equal(rowOf(g, 'demo-b', 'D2').user.answer, '');
+});
+
+test('추천대로 답하기: 하나가 실패하면 거기서 멈추고 줄에 알린다', async () => {
+  const g = GLOBAL();
+  g.projects[0].tickets[0].rows.push(dec({ id: 'D5', display_id: 'WM-D5', title: '쉬운 결정 둘' }));
+  const t = make(g, { status: 500, json: {} });
+  const r = await t.ctl.bulk('wm/t', 'demo-a');
+  assert.deepEqual(r, { ok: false, done: 0 });
+  assert.equal(t.calls.length, 1);
+  assert.match(I.html(g, { state: t.ctl.view() }), /WM-D2에서 멈췄어요/);
+});
+
+
+
+test('결정 없이 막힌 노드: 사유가 없으면 이유 물어보기, 에이전트 사유가 있으면 그 사유와 방향 답하기, 사람이 마지막이면 숨김', () => {
+  const m = MODEL();
+  const nodes = m.projects[0].tickets[0].nodes;
+  nodes.push(nodeOf({ key: 'n9', id: 'WM-9', title: '사유 없음', state: '막힘', column: '기다림' }));
+  nodes.push(nodeOf({ key: 'n8', id: 'WM-8', title: '사람 차례', state: '막힘', column: '기다림', comments: [
+    { id: 'c1', by: 'agent', at: '2026-10-15 11:18', text: '막힘 사유: 공식 페이지에 수분이 없습니다.\n풀려면: 포장지 사진' }] }));
+  nodes.push(nodeOf({ key: 'n7', id: 'WM-7', title: '에이전트 차례', state: '막힘', column: '기다림', comments: [
+    { id: 'c1', by: 'agent', at: '2026-10-15 11:18', text: '사유' }, { id: 'c2', by: 'user', at: '2026-10-15 13:51', text: '환산에 써보자', reply_to: 'c1' }] }));
+  const it = I.items(m);
+  assert.deepEqual(it.stuck.map((x) => x.n.id), ['WM-9', 'WM-8'], '사람이 마지막으로 답한 WM-7은 에이전트 차례라 빠진다');
+  assert.equal(I.count(m), it.decisions.length + it.checks.length + 2);
+  const h = I.html(m, {});
+  assert.match(h, /막힘 · 방향이 필요해요 <span class="n">2<\/span>/);
+  const row9 = h.match(/data-in="stuck"[^>]*data-in-key="n9">[\s\S]*?(?=<div class="irow|$)/)[0];
+  assert.match(row9, /사유가 남아 있지 않아요/);
+  assert.match(row9, /data-in-ask[^>]*>이유 물어보기/);
+  const row8 = h.match(/data-in="stuck"[^>]*data-in-key="n8">[\s\S]*?(?=<div class="irow|$)/)[0];
+  assert.match(row8, /<b>사유<\/b> 막힘 사유: 공식 페이지에 수분이 없습니다\.</, '첫 줄만');
+  assert.match(row8, /data-in-note[^>]*data-in-reply="c1"[^>]*>방향 답하기/);
+  assert.match(row8, /<div class="iopen" data-nm-open data-tkt="wm\/t" data-key="n8" data-ws="demo"/);
+});
+
+test('막힘: 이유 물어보기·방향 답하기는 댓글 하나를 보내고(방향은 사유 스레드에 답글) 줄이 바로 빠진다', async () => {
+  const m = MODEL();
+  const nodes = m.projects[0].tickets[0].nodes;
+  nodes.push(nodeOf({ key: 'n9', id: 'WM-9', title: '사유 없음', state: '막힘', column: '기다림' }));
+  nodes.push(nodeOf({ key: 'n8', id: 'WM-8', title: '사람 차례', state: '막힘', column: '기다림', comments: [{ id: 'c1', by: 'agent', at: 'x', text: '사유' }] }));
+  const reply = (body) => ({ status: 200, json: { ok: true, comments: [...(body.prev || []), { id: 'u1', by: 'user', at: 'y', text: 't', ...(body.reply_to ? { reply_to: body.reply_to } : {}) }] } });
+  const t = make(m, reply({}), reply({ prev: [{ id: 'c1', by: 'agent', at: 'x', text: '사유' }], reply_to: 'c1' }));
+  await t.ctl.ask('wm/t', 'n9');
+  assert.equal(t.calls[0].url, '/w/demo/api/comment');
+  assert.equal(t.calls[0].body.id, 'n9');
+  assert.match(t.calls[0].body.comment.text, /왜 막혔는지/);
+  t.ctl.startNote('wm/t', 'n8', '', 'c1');
+  assert.match(I.html(m, { state: t.ctl.view() }), /data-in-note-draft/);
+  assert.deepEqual(await t.ctl.sendNote(), { ok: false }, '빈 글은 안 보낸다');
+  t.ctl.setNoteDraft('환산에 써보자');
+  await t.ctl.sendNote();
+  assert.deepEqual(t.calls[1].body.comment, { text: '환산에 써보자', reply_to: 'c1' });
+  assert.deepEqual(I.items(m).stuck.map((x) => x.n.id), [], '둘 다 사람이 마지막이라 빠졌다');
 });
 

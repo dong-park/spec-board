@@ -120,7 +120,7 @@ test('완료 기준 — 체크가 하나도 없는 끝남 노드는 빈 상자 �
   const m = fixture();
   const n = { ...nodeOf(m, 'n1'), criteria: [{ text: '가', done: false }, { text: '나', done: false }] };
   const none = M.dialog(n, { ticket: m.projects[0].tickets[0], ui: {} });
-  assert.match(none, /완료 기준[\s\S]*<ul class="nm-plain"><li>가<\/li><li>나<\/li>/);
+  assert.match(none, /완료 기준[\s\S]*<ul class="nm-plain"><li class="nm-ln">(<button[^>]*>\+<\/button>)?가<\/li><li class="nm-ln">(<button[^>]*>\+<\/button>)?나<\/li>/);
   assert.doesNotMatch(none, /nm-bx/);
   const some = M.dialog({ ...n, criteria: [{ text: '가', done: true }, { text: '나', done: false }] }, { ticket: m.projects[0].tickets[0], ui: {} });
   assert.match(some, /nm-bx/);
@@ -255,9 +255,11 @@ test('verdict는 확인 대기일 때만 칸을 옮기고 그 밖에는 저장�
   assert.equal(eff('확인 대기', '확인 대기', '고쳐줘').state, '진행');
 });
 
-test('모달 CSS는 토큰만 쓰고 테두리와 accent가 없다', () => {
+test('모달 CSS는 토큰만 쓰고 테두리가 없으며 accent는 내 댓글 표시(.by-user)에만 쓴다', () => {
   const css = read('node_modal.css').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.doesNotMatch(css, /var\(--accent\)/);
+  // 에이전트와 내 댓글을 한눈에 가르려고 내 아바타·이름·말풍선만 accent를 쓴다(2026-10-15 사람이 목업으로 고름)
+  const accentRules = css.split('}').filter((r) => /var\(--accent\)/.test(r));
+  assert.ok(accentRules.length > 0 && accentRules.every((r) => /^\s*\.by-user\b/.test(r)), 'accent는 .by-user 규칙에만');
   assert.doesNotMatch(css, /border:\s*1px/);
   assert.doesNotMatch(css, /#[0-9a-fA-F]{3,8}\b/);
   // 반지름·그림자는 떠 있는 면(.surface) 하나가 갖는다 — 모달이 그 클래스를 쓴다
@@ -362,5 +364,138 @@ test('composeFix: 자유 입력만 있어도 되고 둘 다 비면 빈 글이다
 
 test('rich: 코드와 굵게만 태그가 되고 나머지는 이스케이프된다', () => {
   assert.equal(M.rich('**회귀**: `a<b` <i>x</i>'), '<b>회귀</b>: <code>a&lt;b</code> &lt;i&gt;x&lt;/i&gt;');
+});
+
+
+// ── 댓글: PR 리뷰처럼 줄에 다는 스레드
+test('스레드는 오른쪽 댓글 열에 본문 순서로, 줄에는 댓글 수만 보이고 줄이 사라진 스레드·전체 댓글은 그 뒤에 온다', () => {
+  const n = node({ state: '끝남', column: '끝남', criteria: [{ text: '테스트 통과', done: true }], comments: [
+    { id: 'c1', by: 'user', at: '2026-10-14 10:00', text: '어떤 테스트요?', anchor: { sec: 'crit', text: '테스트 통과' } },
+    { id: 'c2', by: 'agent', at: '2026-10-14 10:05', text: 'jest 한 파일입니다', reply_to: 'c1' },
+    { id: 'c3', by: 'user', at: '2026-10-14 10:06', text: '옛 줄', anchor: { sec: 'crit', text: '지운 기준' } },
+    { id: 'c4', by: 'user', at: '2026-10-14 10:07', text: '전체 의견' },
+  ] });
+  const html = M.dialog(n, { ticket: { nodes: [n], rows: [] } });
+  const crit = html.slice(html.indexOf('완료 기준'), html.indexOf('data-nm-comments'));
+  assert.match(crit, /<li class="nm-ln has[^"]*">[\s\S]*data-nm="cm-focus" data-thread="c1"[^>]*>💬 2<\/button>/, '줄에는 댓글 수(글 2개)');
+  assert.doesNotMatch(crit, /어떤 테스트요/, '스레드 글은 본문에 끼지 않는다');
+  const rail = html.slice(html.indexOf('data-nm-comments'));
+  assert.match(rail, /<b>완료 기준<\/b> · 테스트 통과[\s\S]*어떤 테스트요\?[\s\S]*jest 한 파일입니다[\s\S]*지운 기준[\s\S]*전체 의견/, '줄 스레드(인용)→줄 없는 스레드→전체 댓글 순');
+  assert.match(rail, /class="nm-cm-e by-user"><span class="nm-av" aria-hidden="true">나<\/span>[\s\S]*class="nm-cm-e by-agent"><span class="nm-av" aria-hidden="true">AI/, '나와 에이전트를 아바타로 가른다');
+  assert.match(rail, /class="nm-rc"><div class="nm-cm-new"><textarea[^>]*placeholder="노드 전체에 댓글/, '맨 아래에 전체 댓글 칸이 늘 있다');
+  assert.match(html, /data-nm="cm-new" data-sec="crit" data-text="테스트 통과"/, '줄마다 + 버튼');
+  assert.doesNotMatch(html, /data-cm-active/, '쓰기 시작 전에는 포커스를 가져갈 입력 칸이 없다');
+});
+
+test('줄 댓글 수를 누르면 그 줄과 스레드를 같이 강조하고, 맨 아래 칸에 바로 쓰면 전체 댓글이 된다', async () => {
+  const model = fixture();
+  const n2 = nodeOf(model, 'n2');
+  n2.criteria = [{ text: '캡처 3장', done: false }];
+  n2.comments = [{ id: 'c1', by: 'agent', at: 'x', text: '찍었어요', anchor: { sec: 'crit', text: '캡처 3장' } }];
+  const { c, fetch, last } = ctl(model, { status: 200, body: { ok: true, comments: [] } });
+  c.open('p/t', 'n2');
+  c.dispatch('cm-focus', { thread: 'c1' });
+  assert.match(last(), /<li class="nm-ln has hl">/);
+  assert.match(last(), /<div class="nm-cm on" data-cm-thread="c1">/);
+  c.dispatch('cm-focus', { thread: 'c1' });
+  assert.doesNotMatch(last(), /nm-cm on/, '다시 누르면 푼다');
+  c.setCmDraft('전체에 한마디');
+  await c.cmSend();
+  assert.deepEqual(fetch.calls[0].body.comment, { text: "전체에 한마디" });
+});
+
+test('스레드 상태: 사람 글이 마지막이면 답을 기다리고, 해결하면 접힌다', () => {
+  const t = M.threadsOf([
+    { id: 'c1', by: 'user', text: 'a' }, { id: 'c2', by: 'agent', text: 'b', reply_to: 'c1' },
+    { id: 'c3', by: 'user', text: 'c' }, { id: 'c4', by: 'user', reply_to: 'c3', resolve: true },
+  ]);
+  assert.deepEqual(t.map((x) => [x.id, x.waiting, x.resolved]), [['c1', false, false], ['c3', false, true]]);
+  const n = node({ state: '끝남', column: '끝남', comments: [{ id: 'c1', by: 'user', text: '닫힌 것' }, { id: 'c2', by: 'user', reply_to: 'c1', resolve: true }] });
+  assert.match(M.dialog(n, { ticket: { nodes: [n], rows: [] } }), /<details class="nm-cm is-done"[^>]*><summary>해결됨 · 닫힌 것/);
+});
+
+test('줄 + → 입력 → 남기기는 anchor와 함께 comment API에 한 번 보낸다', async () => {
+  const model = fixture();
+  const n2 = nodeOf(model, 'n2');
+  n2.criteria = [{ text: '캡처 3장', done: false }];
+  const { c, fetch, last } = ctl(model, { status: 200, body: { ok: true, comments: [{ id: 'c1', by: 'user', at: 'x', text: '어디요?', anchor: { sec: 'crit', text: '캡처 3장' } }] } });
+  c.open('p/t', 'n2');
+  c.dispatch('cm-new', { sec: 'crit', text: '캡처 3장' });
+  assert.match(last(), /class="nm-cm-in"/);
+  await c.cmSend();
+  assert.equal(fetch.calls.length, 0, '빈 글은 보내지 않는다');
+  c.setCmDraft('어디요?');
+  await c.cmSend();
+  assert.equal(fetch.calls.length, 1);
+  assert.equal(fetch.calls[0].path, '/w/demo/api/comment');
+  assert.deepEqual(fetch.calls[0].body, { sheet: 'p/t', id: 'n2', comment: { text: '어디요?', anchor: { sec: 'crit', text: '캡처 3장' } } });
+  assert.equal(c.state.cm, null);
+  assert.match(last(), /어디요\?/);
+  assert.equal(n2.verdict, '', '댓글은 통과·고쳐줘 칸을 건드리지 않는다');
+});
+
+test('답글과 해결은 reply_to로 보내고 댓글 글은 태그로 새지 않는다', async () => {
+  const model = fixture();
+  nodeOf(model, 'n2').comments = [{ id: 'c1', by: 'agent', text: '<img src=x onerror=alert(1)>' }];
+  const { c, fetch, last } = ctl(model, { status: 200, body: { ok: true, comments: [] } });
+  c.open('p/t', 'n2');
+  assert.doesNotMatch(last(), /<img src=x/);
+  c.dispatch('cm-reply', { thread: 'c1' });
+  c.setCmDraft('네');
+  await c.cmSend();
+  await c.dispatch('cm-resolve', { thread: 'c1', on: '1' });
+  assert.deepEqual(fetch.calls.map((x) => x.body.comment), [{ text: '네', reply_to: 'c1' }, { reply_to: 'c1', resolve: true }]);
+});
+
+test('댓글 스크린샷은 글 아래 썸네일로 보이고, 이미지만 있는 댓글도 한 줄로 보인다', () => {
+  const n = node({ state: '확인 대기', column: '확인 대기', comments: [
+    { id: 'c1', by: 'agent', at: '2026-10-15 14:00', text: '캡처 첨부', images: ['cm-20261015-1.png'] },
+    { id: 'c2', by: 'user', at: '2026-10-15 14:01', images: ['cm-u20261015-ab.png'] },
+  ] });
+  const html = M.dialog(n, { workspace: 'demo', ticket: { slug: 'p/t', nodes: [n], rows: [] } });
+  assert.match(html, /캡처 첨부[\s\S]*class="nm-cm-img" data-nm="zoom" data-name="cm-20261015-1\.png"/);
+  assert.match(html, /api\/evidence\?sheet=p%2Ft&amp;id=n1&amp;name=cm-20261015-1\.png/);
+  assert.match(html, /data-name="cm-u20261015-ab\.png"/, '이미지만 있는 댓글');
+});
+
+test('스크린샷을 올려 붙이면 이름만 댓글과 함께 가고, 이미지만으로도 남길 수 있다', async () => {
+  const model = fixture();
+  const n2 = nodeOf(model, 'n2');
+  const calls = [];
+  const c = M.controller({
+    getModel: () => model, redraw() {}, render() {},
+    fetch: async (path, init) => {
+      calls.push({ path, init });
+      if (path.includes('/api/comment-image')) return { ok: true, status: 200, json: async () => ({ ok: true, name: 'cm-u1-aa.png' }) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, comments: [{ id: 'c1', by: 'user', at: 'x', images: ['cm-u1-aa.png'] }] }) };
+    },
+  });
+  c.open('p/t', 'n2');
+  c.dispatch('cm-new', {});
+  await c.cmAttach({ type: 'text/plain', size: 3 });
+  assert.equal(calls.length, 0, '이미지가 아니면 요청이 없다');
+  await c.cmAttach({ type: 'image/png', size: 10 });
+  assert.match(calls[0].path, /\/w\/demo\/api\/comment-image\?sheet=p%2Ft&id=n2$/);
+  assert.equal(calls[0].init.headers['Content-Type'], 'image/png');
+  assert.deepEqual(c.state.cmImages, ['cm-u1-aa.png']);
+  await c.cmSend();   // 글 없이 이미지만
+  assert.deepEqual(JSON.parse(calls[1].init.body).comment, { text: '', images: ['cm-u1-aa.png'] });
+  assert.deepEqual(c.state.cmImages, []);
+  assert.equal(n2.comments.length, 1);
+});
+
+
+test('여러 장을 한 번에 붙여도 댓글 하나에 6장을 넘지 않는다', async () => {
+  const model = fixture();
+  let n = 0;
+  const c = M.controller({
+    getModel: () => model, redraw() {}, render() {},
+    fetch: async () => { const i = ++n; await new Promise((r) => setTimeout(r, 5)); return { ok: true, status: 200, json: async () => ({ ok: true, name: 'cm-' + i + '.png' }) }; },
+  });
+  c.open('p/t', 'n2');
+  c.dispatch('cm-new', {});
+  await Promise.all(Array.from({ length: 9 }, () => c.cmAttach({ type: 'image/png', size: 10 })));
+  assert.equal(n, 6, '업로드도 6번만 나간다');
+  assert.equal(c.state.cmImages.length, 6);
 });
 

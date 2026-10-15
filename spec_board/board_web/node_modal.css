@@ -3,7 +3,7 @@
    이탤릭·밑줄·대문자 나열 없음 · 상태는 아이콘+글자 · 구분선·칩 테두리 대신 여백. 설계: 이 저장소 docs/reading.md */
 .nm-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.28); }
 .nm { --knock: var(--card); position: fixed; z-index: 61; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  width: min(560px, calc(100vw - 2 * var(--card-gap))); max-height: calc(100vh - 4 * var(--card-gap));
+  width: min(1120px, calc(100vw - 2 * var(--card-gap))); height: min(860px, calc(100vh - 4 * var(--card-gap)));
   display: flex; flex-direction: column; overflow: hidden; padding: 20px 0 0;
   font-size: 16px; line-height: 1.7; letter-spacing: .01em; word-spacing: .08em; color: var(--text-1); text-align: left; }
 .nm-top { display: flex; align-items: center; gap: 10px; padding: 0 20px 0 28px; flex: none; font-size: 14.5px; color: var(--text-2); }
@@ -11,8 +11,12 @@
 .nm-st { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; color: var(--text-1); }
 .nm-x { margin-left: auto; width: 28px; height: 28px; border: 0; border-radius: 4px; background: none; color: var(--text-2); font: inherit; font-size: 18px; cursor: pointer; }
 .nm-x:hover { background: var(--hover); }
-.nm-title { margin: 12px 28px 0; font-size: 24px; line-height: 1.35; font-weight: 700; color: var(--text-1); word-break: keep-all; overflow-wrap: break-word; }
-.nm-body { flex: 1; min-height: 0; overflow: auto; padding: 0 28px 8px; word-break: keep-all; overflow-wrap: break-word; }
+.nm-title { margin: 12px 28px 16px; font-size: 24px; line-height: 1.35; font-weight: 700; color: var(--text-1); word-break: keep-all; overflow-wrap: break-word; }
+/* 2열 — 왼쪽 본문(+판정 버튼), 오른쪽 댓글 열. GitHub PR처럼 댓글이 본문 사이에 끼지 않는다 */
+.nm-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 380px; border-top: 1px solid var(--active); }
+.nm-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.nm-body { flex: 1; min-height: 0; overflow: auto; padding: 0 40px 16px; word-break: keep-all; overflow-wrap: break-word; }
+.nm-body > * { max-width: 680px; }
 .nm-s { margin-top: 28px; }
 .nm-h { margin: 0 0 8px; font-size: 14.5px; font-weight: 600; color: var(--text-2); }
 .nm-p { margin: 0; }
@@ -51,12 +55,12 @@
 .nm-crit .on .nm-bx { background: var(--text-1); box-shadow: none; }
 .nm-crit .on .nm-t { color: var(--text-2); }
 .nm-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.nm-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; padding: 22px 28px 20px; }
+.nm-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; padding: 14px 40px 18px; border-top: 1px solid var(--active); }
 .nm-foot:has(textarea) { align-items: flex-end; }
 .nm-hint { margin-right: auto; font-size: 14.5px; color: var(--text-2); }
 .nm-in { flex: 1; min-width: 0; padding: 8px 10px; border: 0; border-radius: 4px; background: var(--card-2); color: var(--text-1); font: inherit; font-size: 14.5px; }
 textarea.nm-in { height: auto; min-height: 64px; resize: vertical; line-height: 1.5; }
-.nm-msg { margin: 0; padding: 0 28px 14px; font-size: 14.5px; color: var(--text-2); }
+.nm-msg { margin: 0; padding: 0 40px 14px; font-size: 14.5px; color: var(--text-2); }
 .nm-err { color: var(--st-err); }
 .nm .btn, .nm .btn:not(.btn-primary) { height: 36px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: var(--text-1); font: inherit; font-size: 14.5px; font-weight: 500; cursor: pointer; }
 .nm .btn:not(.btn-primary):hover { background: var(--hover); }
@@ -69,3 +73,73 @@ textarea.nm-in { height: auto; min-height: 64px; resize: vertical; line-height: 
 .btn-primary:hover { filter: brightness(1.06); }
 .btn[aria-pressed="true"] { color: var(--st-warn); }
 
+/* 댓글 — PR 리뷰처럼 줄 왼쪽 여백의 + 로 연다. 스레드는 오른쪽 열에, 줄에는 댓글 수만 */
+.nm-ln { position: relative; }
+.nm-ln.has { padding-right: 56px; }
+.nm-ln.hl { border-radius: 4px; background: color-mix(in srgb, var(--st-warn) 12%, transparent);
+  box-shadow: -8px 0 0 color-mix(in srgb, var(--st-warn) 12%, transparent), 8px 0 0 color-mix(in srgb, var(--st-warn) 12%, transparent); }
+.nm-pin { position: absolute; right: 0; top: 4px; height: 22px; padding: 0 7px; border: 0; border-radius: 11px; background: var(--chip); color: var(--text-2);
+  font: inherit; font-size: 13px; line-height: 22px; cursor: pointer; }
+.nm-pin:hover { background: var(--active); color: var(--text-1); }
+.nm-pin.is-done { opacity: .6; }
+.nm-i.nm-col { flex-direction: column; align-items: stretch; gap: 0; }
+.nm-cm-add { position: absolute; left: -25px; top: 5px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px;
+  background: var(--text-1); color: var(--card); font: inherit; font-size: 15px; line-height: 20px; text-align: center; cursor: pointer; opacity: 0; }
+.nm-r > .nm-cm-add { top: 7px; }
+.nm-ln:hover > .nm-cm-add, .nm-cm-add:focus-visible { opacity: 1; }
+@media (hover: none) { .nm-cm-add { opacity: .35; } }
+.nm-rail { display: flex; flex-direction: column; min-height: 0; background: var(--card-2); word-break: keep-all; overflow-wrap: break-word; }
+.nm-rh { display: flex; align-items: center; gap: 8px; padding: 16px 20px 10px; font-size: 14.5px; font-weight: 600; color: var(--text-2); }
+.nm-rh .c { font-weight: 400; }
+.nm-rh .w { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--text-1); }
+.nm-rh .w i { width: 7px; height: 7px; border-radius: 50%; background: var(--st-warn); }
+.nm-rl { flex: 1; min-height: 0; overflow: auto; padding: 0 14px 12px; }
+.nm-cm-none { margin: 4px 6px; font-size: 14.5px; color: var(--text-2); }
+.nm-rc { flex: none; padding: 12px 14px 14px; border-top: 1px solid var(--active); }
+.nm-cm { margin: 0 0 10px; padding: 10px 12px; border-radius: 6px; background: var(--card); font-size: 14.5px; line-height: 1.6; font-weight: 400; color: var(--text-1); }
+.nm-cm.on { box-shadow: inset 0 0 0 1.5px var(--text-1); }
+.nm-to { display: block; width: 100%; margin: 0 0 8px; padding: 0 0 0 10px; border: 0; background: none; box-shadow: inset 2px 0 0 var(--text-2);
+  color: var(--text-2); font: inherit; font-size: 13.5px; line-height: 1.5; text-align: left; cursor: pointer; }
+.nm-to b { font-weight: 500; }
+.nm-to:hover { color: var(--text-1); }
+/* 누가 썼나 — 아바타(AI·나)와 내 글은 옅은 accent 말풍선 */
+.nm-cm-e { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: 10px; }
+.nm-cm-e > * { grid-column: 2; }
+.nm-cm-e + .nm-cm-e { margin-top: 14px; }
+.nm-av { grid-column: 1 !important; grid-row: 1 / span 3; width: 24px; height: 24px; margin-top: 2px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; line-height: 1; }
+.by-agent .nm-av { background: var(--text-1); color: var(--card); }
+.by-user .nm-av { background: var(--accent); color: var(--on-accent); }
+.by-user .nm-cm-m b { color: var(--accent); }
+.by-user .nm-cm-t { margin-top: 4px; padding: 8px 11px; border-radius: 4px 10px 10px 10px; background: color-mix(in srgb, var(--accent) 11%, var(--card)); }
+.nm-cm-m { display: flex; gap: 8px; margin: 0; color: var(--text-2); }
+.nm-cm-m b { font-weight: 600; color: var(--text-1); }
+.nm-cm-t { margin: 2px 0 0; }
+.nm-cm-bar { display: flex; align-items: center; justify-content: flex-end; gap: 2px; margin-top: 6px; }
+.nm-cm-w { margin-right: auto; color: var(--text-2); }
+.nm-cm-b { padding: 2px 8px; border: 0; border-radius: 4px; background: none; color: var(--text-2); font: inherit; font-size: 14px; cursor: pointer; }
+.nm-cm-b:hover { background: var(--hover); color: var(--text-1); }
+details.nm-cm > summary { color: var(--text-2); cursor: pointer; }
+details.nm-cm[open] > summary { margin-bottom: 8px; }
+.nm-cm-new { margin: 0; }
+.nm-cm .nm-cm-new { margin: 8px 0 0; }
+.nm-cm-in { display: block; width: 100%; box-sizing: border-box; min-height: 72px; padding: 8px 10px; border: 0; border-radius: 4px; resize: vertical;
+  background: var(--card); color: var(--text-1); font: inherit; font-size: 14.5px; line-height: 1.5; }
+.nm-cm .nm-cm-in { background: var(--card-2); }
+.nm-cm-act { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.nm-cm-act .btn, .nm-cm-act .btn:not(.btn-primary) { height: 32px; }
+.nm-cm-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.nm-cm-img { padding: 0; border: 0; border-radius: 8px; background: var(--hover); cursor: zoom-in; overflow: hidden; line-height: 0; }
+.nm-cm-img img { display: block; max-width: 220px; max-height: 160px; object-fit: cover; }
+.nm-cm-chip { position: relative; display: inline-block; }
+.nm-cm-chip .nm-cm-img img { max-width: 96px; max-height: 72px; }
+.nm-cm-x { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: rgba(0, 0, 0, 0.6); color: var(--card); font-size: 14px; line-height: 20px; cursor: pointer; }
+.nm-cm-file { display: inline-flex; align-items: center; height: 32px; cursor: pointer; margin-right: auto; }
+
+/* 좁은 화면 — 한 열로 쌓고 댓글 열은 본문·판정 버튼 아래. 스크롤은 전체 한 곳 */
+@media (max-width: 880px) {
+  .nm-grid { grid-template-columns: minmax(0, 1fr); overflow: auto; }
+  .nm-main, .nm-rail { min-height: auto; }
+  .nm-body { overflow: visible; padding: 0 22px 12px 36px; }
+  .nm-foot { padding: 12px 22px; }
+  .nm-rl { flex: none; overflow: visible; }
+}

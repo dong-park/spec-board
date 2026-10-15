@@ -11,7 +11,7 @@
   spec-board wait <스펙 폴더> [--timeout 초]    입력이 생기면 종료 0, 시간이 다 되면 3
   spec-board patch <스펙 폴더> <id> <json|->    user 밖 칸을 잠금 아래 고친다
   spec-board link <스펙 폴더> [--local]         보드 주소
-  spec-board node set|block|review|verdict ...  노드 브리프 상태 쓰기
+  spec-board node set|block|review|verdict|comment ...  노드 브리프 상태 쓰기 · 댓글 답
   spec-board ready <spec.md>                    DAG에서 지금 띄울 노드
   spec-board lint <폴더>...                     spec 형식 검사 (쓰지 않는다)
 """

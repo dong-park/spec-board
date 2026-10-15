@@ -118,9 +118,13 @@ test('시트 줄은 지금 시트를 켜고, 다른 워크스페이스 시트는
   assert.deepEqual(V.parseHash('#s/spec-관제/결정-시트'), { view: 'sheet', project: null, sheet: 'spec-관제/결정-시트' });
 });
 
-test('Inbox 개수는 열린 결정 + 확인 대기, 결정 배지는 막는 결정 수다', () => {
-  const html = V.sidebar(MODEL, {});
-  assert.match(html, /Inbox<\/span><span class="c">3<\/span>/);
+test('Inbox 개수는 아직 안 한 일(답 없는 결정 + 안 누른 확인 대기), 결정 배지는 막는 결정 수다', () => {
+  const dec = (id, over) => ({ id, kind: 'decision', display_id: 'X-' + id, title: id, status: '아직 안 함', open: true, reversible: true, user: { answer: '' }, options: [], ...over });
+  const m = { workspace: 'w', projects: [{ key: 'p', tickets: [{ slug: 't', title: 't', rows: [
+    dec('D1', { reversible: false }), dec('D2', { user: { answer: 'A' } }), dec('D3', { open: false, status: '끝남' }),
+  ], nodes: [{ key: 'n1', id: 'X-1', title: 'a', state: '확인 대기' }, { key: 'n2', id: 'X-2', title: 'b', state: '확인 대기', verdict: '통과' }] }] }] };
+  const html = V.sidebar(m, {});
+  assert.match(html, /Inbox<\/span><span class="c">2<\/span>/, 'D1과 n1만 — 답한 D2·통과한 n2·끝난 D3은 안 센다');
   assert.match(html, /Decisions<\/span><span class="badge-dec">1<\/span>/);
   assert.doesNotMatch(V.sidebar({ projects: [], summary: {} }, {}), /badge-dec/);
 });

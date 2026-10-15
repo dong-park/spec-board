@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "spec_board"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _store  # noqa: F401  사람 칸 저장소를 임시 폴더로
 
 import migrate_format
 import node_state
@@ -167,7 +169,7 @@ class WriteTest(SymlinkBase):
     def test_node_cell_write_refuses_a_symlinked_cell_and_leaves_the_outside_file_alone(self):
         out = self.outside_file("n1.json", json.dumps({"id": "n1", "user": {"verdict": "", "fix": ""}}))
         before = out.read_text()
-        self.link(self.t / "rows" / "nodes" / "n1.json", out)
+        self.link(sm.local_dir(self.t) / "nodes" / "n1.json", out)
         with self.assertRaises(ValueError):
             sheet.save_node_user(self.t, "n1", {"verdict": "통과"}, None)
         self.assertEqual(out.read_text(), before)
@@ -175,7 +177,7 @@ class WriteTest(SymlinkBase):
     def test_node_cell_write_refuses_a_symlinked_nodes_dir(self):
         real = self.out / "nodes"
         real.mkdir()
-        self.link(self.t / "rows" / "nodes", real)
+        self.link(sm.local_dir(self.t) / "nodes", real)
         with self.assertRaises(ValueError):
             sheet.save_node_user(self.t, "n1", {"verdict": "통과"}, None)
         self.assertEqual(list(real.iterdir()), [])
@@ -183,7 +185,7 @@ class WriteTest(SymlinkBase):
     def test_ticket_json_write_refuses_a_symlink(self):
         out = self.outside_file("ticket.json", json.dumps({"user": {"priority": "", "paused": False}}))
         before = out.read_text()
-        self.link(self.t / "ticket.json", out)
+        self.link(sm.ticket_file(self.t), out)
         with self.assertRaises(ValueError):
             sheet.save_ticket_user(self.t, {"priority": "P0"}, None)
         self.assertEqual(out.read_text(), before)

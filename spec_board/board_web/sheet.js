@@ -60,7 +60,7 @@
     const blocking = (sum && sum.decisions_blocking) || 0;
     let h = '<aside class="side surface">' +
       '<label class="sq"><input type="search" data-sheet-q placeholder="시트 찾기" value="' + esc(ui.q || '') + '" autocomplete="off"></label>' +
-      ui.nav('Inbox', 'i-inbox', '#inbox', ui.view === 'inbox', inbox ? '<span class="c">' + inbox + '</span>' : '') +
+      ui.nav('Inbox', 'i-inbox', '#inbox', ui.view === 'inbox', (ui.fresh && ui.fresh.size ? '<span class="newdot" title="새로 온 할 일"></span>' : '') + (inbox ? '<span class="c">' + inbox + '</span>' : '')) +
       ui.nav('Decisions', 's-dec', '#dec', ui.view === 'dec', blocking ? '<span class="badge-dec">' + blocking + '</span>' : '');
     const match = (s) => !q || (sheetName(s.title, s.slug) + ' ' + s.slug + ' ' + s.repo).toLowerCase().includes(q);
     for (const g of GROUPS) {
@@ -76,14 +76,16 @@
         const here = cur && s.workspace === cur.workspace && s.slug === cur.slug;
         const href = cur && s.workspace === cur.workspace ? '#s/' + s.slug : '/w/' + encodeURIComponent(s.workspace) + '/board/#s/' + s.slug;
         const st = g === '끝남' ? ['s-done', 'done'] : g === '준비' ? ['s-todo', 'todo'] : ['s-prog', 'prog'];
-        const right = s.blocking ? '<span class="badge-dec">◆' + s.blocking + '</span>' : '<span class="rt">' + esc(ago(s.last, ui.now)) + '</span>';
+        const isNew = !!(ui.fresh && ui.fresh.has(s.workspace + '|' + s.slug));
+        const tail = s.blocking ? '<span class="badge-dec">◆' + s.blocking + '</span>' : '<span class="rt">' + esc(ago(s.last, ui.now)) + '</span>';
+        const right = isNew ? '<span class="srr"><span class="newdot" title="새로 온 할 일"></span>' + tail + '</span>' : tail; // 줄의 세 번째 칸 하나에
         h += '<a class="sr' + (here ? ' on' : '') + (g === '끝남' ? ' is-done' : '') + '" href="' + esc(href) + '"' + (cur && s.workspace !== cur.workspace ? ' data-ws="' + esc(s.workspace) + '" data-hash="#s/' + esc(s.slug) + '"' : '') + (here ? ' aria-current="page"' : '') + '>' +
           ui.icon(st[0], 'st st-' + st[1]) + '<span class="sm"><span class="tt">' + esc(sheetName(s.title, s.slug)) + '</span>' +
           '<span class="meta"><span class="tk tk-' + ui.color(s.slug) + '"></span>' + esc(s.repo) + (s.total ? ' · ' + s.done + '/' + s.total : '') + '</span></span>' + right + '</a>';
       }
     }
     const nArch = (sheets || []).filter((s) => s.archived).length;
-    h += '<div class="sfoot"><a class="nav' + (ui.view === 'archive' ? ' on' : '') + '" href="#archive"><span class="t">보관</span>' + (nArch ? '<span class="c">' + nArch + '</span>' : '') + '</a>' +
+    h += '<div class="sfoot">' + (ui.live || '') + '<a class="nav' + (ui.view === 'archive' ? ' on' : '') + '" href="#archive"><span class="t">보관</span>' + (nArch ? '<span class="c">' + nArch + '</span>' : '') + '</a>' +
       '<a class="nav' + (ui.view === 'repos' ? ' on' : '') + '" href="#repos"><span class="t">Repos &amp; 서비스</span></a></div>';
     return h + '</aside>';
   }
@@ -181,34 +183,101 @@
       (Object.keys(rv).length ? '<span>리뷰</span><span class="rvs">' + ['ok', 'fix', 'no', 'skip'].filter((k) => rv[k]).map((k) => '<span class="rv rv-' + k + '">' + REVIEW[k] + ' ' + rv[k] + '</span>').join('') + '</span>' : '') +
       '<span>레포</span><span class="mono">' + esc(model.workspace || '') + '</span>' +
       (model.branch ? '<span>브랜치</span><span class="mono">' + esc(model.branch) + '</span>' : '') +
-      '<span>spec</span><span class="mono">spec/' + esc(t.slug) + '</span></div>' +
+      '<span>spec</span><span class="mono">spec/' + esc(t.slug) + '</span>' + wakeRow(t, model, ui) + '</div>' +
+      (ui.tab === 'dec' ? '' : decs(t, model, ui)) + // 결정 탭에서는 본문이 같은 목록이라 패널에서 뺀다
       (act ? '<div class="ph">최근 웨이브</div><div class="act">' + act + '</div>' : '') + '</aside>';
+  }
+
+  /* 깨우기 — 사람이 답하면 깨울 담당 스레드(apply·pending을 부른 메인 스레드)와 켬/끔(ticket.json user.wake, board-wake D4) */
+  function wakeRow(t, model, ui) {
+    const esc = ui.esc;
+    const a = t.agent || {};
+    const ws = ui.workspace || model.workspace || '';
+    const on = t.wake !== false;
+    const who = a.thread
+      ? '<a class="mono" href="codex://threads/' + esc(encodeURIComponent(a.thread)) + '" title="' + esc(a.thread + (a.since ? ' · ' + a.since + '부터' : '')) + '">' + esc(a.thread.slice(0, 13)) + '</a>'
+      : ownerPick(t, ws, ui);
+    // 반영 대기 — 답했지만 아직 열린 결정, 통과·고쳐줘를 남긴 확인 대기 노드. 담당에게 다시 보낼 수 있다
+    const waiting = (t.rows || []).filter((r) => r && r.kind === 'decision' && (r.open != null ? r.open : r.status !== '끝남') && String((r.user || {}).answer || '').trim()).length +
+      (t.nodes || []).filter((n) => n.state === '확인 대기' && (n.verdict === '통과' || n.verdict === '고쳐줘')).length;
+    const nudge = a.thread && on && waiting
+      ? '<button type="button" class="wk nudge" data-nudge="' + esc(ws + '|' + t.slug) + '" title="담당 스레드를 지금 깨워 반영하게 해요">반영 대기 ' + waiting + '건 보내기</button>' : '';
+    return '<span>깨우기</span><span class="pwake">' + who +
+      '<button type="button" class="wk' + (on ? ' on' : '') + '" data-wake="' + esc(ws + '|' + t.slug + '|' + (on ? '0' : '1')) + '" aria-pressed="' + on + '">' + (on ? '켬' : '끔') + '</button>' + nudge + '</span>';
+  }
+
+  // 담당 정하기 — 다른 시트를 맡고 있는 스레드 중에서 고른다(ui.owners = /api/outbox의 owners)
+  function ownerPick(t, ws, ui) {
+    const esc = ui.esc;
+    const list = (ui.owners || []).map((o) => {
+      const names = [...new Set((o.sheets || []).map((s) => String(s.slug).split('/').pop()))];
+      return '<option value="' + esc(o.thread) + '">' + esc(o.thread.slice(0, 13) + ' · ' + names.slice(0, 2).join(', ') + (names.length > 2 ? ' 외 ' + (names.length - 2) : '')) + '</option>';
+    }).join('');
+    return '<span class="mono" title="메인 스레드가 spec-board pending을 부르면 생겨요">없음</span>' +
+      (list ? '<select class="wk" data-owner-sel="' + esc(ws + '|' + t.slug) + '" aria-label="담당 스레드 정하기"><option value="">담당 정하기…</option>' + list + '</select>' : '');
+  }
+
+  /* 속성 패널의 결정 칸 — 이 시트의 결정 행. 답할 것(막는 결정 먼저) → 답함·반영 대기 → 끝남 순서.
+     줄을 누르면 결정 모달이 열린다(view.js의 [data-dec] 위임 — Inbox·Decisions와 같은 길). 여기서는 아무것도 쓰지 않는다. */
+  function decs(t, model, ui) {
+    const esc = ui.esc;
+    const all = (t.rows || []).filter((r) => r && r.kind === 'decision');
+    if (!all.length) return '';
+    const ws = ui.workspace || model.workspace || '';
+    const isOpen = (d) => (d.open != null ? !!d.open : d.status !== '끝남');
+    const ans = (d) => String((d.user || {}).answer || '').trim();
+    const opt = (d, k) => (Array.isArray(d.options) ? d.options : []).find((o) => o && String(o.key) === String(k));
+    const label = (d, k) => { const o = opt(d, k); return o ? o.key + ' ' + (o.label || '') : k; };
+    const hard = (d) => isOpen(d) && d.reversible === false && !ans(d);
+    const sid = (d) => String(d.display_id || d.id || '').split('-').pop(); // 시트 안이라 앞의 시트 머리는 빼고 D1만
+    const todo = all.filter((d) => isOpen(d) && !ans(d)).sort((a, b) => (hard(b) ? 1 : 0) - (hard(a) ? 1 : 0));
+    const waiting = all.filter((d) => isOpen(d) && ans(d));
+    const done = all.filter((d) => !isOpen(d));
+    const row = (d, cls, ic, sub) => '<div class="pdec is-' + cls + '" role="button" tabindex="0" data-dec="' + esc(d.display_id) + '" data-ticket="' + esc(t.slug) + '" data-dec-ws="' + esc(ws) + '">' +
+      ui.icon(ic, 'st st-' + cls) + '<span class="pdt"><span class="pdh"><span class="id" title="' + esc(d.display_id) + '">' + esc(sid(d)) + '</span>' + esc(d.title) + '</span>' +
+      (sub ? '<span class="pds">' + esc(sub) + '</span>' : '') + '</span></div>';
+    let h = '<div class="ph">결정 <span class="n">' + (todo.length ? '답할 ' + todo.length + ' · ' : '') + '전체 ' + all.length + '</span></div><div class="pdecs">';
+    h += todo.map((d) => hard(d)
+      ? row(d, 'blk', 's-dec', '되돌리기 어려움' + (d.recommend && opt(d, d.recommend) ? ' · 추천 ' + label(d, d.recommend) : ''))
+      : row(d, 'todo', 's-todo', d.recommend && opt(d, d.recommend) ? '추천 ' + label(d, d.recommend) + ' · 답 없으면 추천대로' : '')).join('');
+    h += waiting.map((d) => row(d, 'todo', 's-todo', '답 ' + label(d, ans(d)) + ' · 반영 대기')).join('');
+    h += done.map((d) => row(d, 'done', 's-done', ans(d) ? '답 ' + label(d, ans(d)) : d.recommend && opt(d, d.recommend) ? '추천대로 ' + label(d, d.recommend) : '끝남')).join('');
+    return h + '</div>';
   }
 
   /* p = 보기 설정, open = 열린 팝오버('disp' | 'filter' | 'filter:state' | 'filter:since' | null).
      ui = {esc, icon, look, workspace, state, color, today}. */
   function page(t, model, p, open, ui) {
     const esc = ui.esc;
+    const decTab = ui.tab === 'dec'; // 결정 탭(#sd/<시트>) — 본문은 이 시트의 결정 목록, 흐름 전용 버튼은 숨긴다
+    const nTodo = (t.rows || []).filter((r) => r && r.kind === 'decision' && (r.open != null ? r.open : r.status !== '끝남') && !String((r.user || {}).answer || '').trim()).length;
     p = Object.assign({}, Flow.DEFAULTS, p || {});
     const repo = String(model.root || '').split('/').filter(Boolean).pop() || model.workspace || '';
     const views = [['all', '전체'], ['mine', '내 차례'], ['today', '오늘']].map(([v, l]) =>
       '<button type="button" class="vt' + (p.view === v ? ' on' : '') + '" data-sv-set="view:' + v + '">' + l + '<span class="n">' + Flow.viewCount(t, v, ui.today) + '</span></button>').join('');
-    const filterOpen = open && open.indexOf('filter') === 0;
-    const filters = p.filters || [];
+    const filterOpen = !decTab && open && open.indexOf('filter') === 0;
+    const filters = decTab ? [] : p.filters || [];
+    const tab = (on, href, label) => '<a class="tab' + (on ? ' on' : '') + '" href="' + esc(href) + '"' + (on ? ' aria-current="page"' : '') + '>' + label + '</a>';
     let h = '<main class="main surface sheetp">' +
       '<div class="shead"><span class="crumb"><span class="tk tk-' + ui.color(t.slug) + '"></span>' + esc(repo) + ' › <b>' + esc(sheetName(t.title, t.slug)) + '</b></span>' +
-      '<span class="tabs"><span class="tab on">흐름</span><button type="button" class="tab" data-ticket="' + esc(t.slug) + '">spec.md</button></span>' +
-      '<span class="views">' + views + '</span><span class="sp"></span>' +
+      '<span class="tabs">' + tab(!decTab, '#s/' + t.slug, '흐름') +
+      tab(decTab, '#sd/' + t.slug, '결정' + (nTodo ? '<span class="badge-dec">' + nTodo + '</span>' : '')) +
+      '<button type="button" class="tab" data-ticket="' + esc(t.slug) + '">spec.md</button></span>' +
+      (decTab ? '' : '<span class="views">' + views + '</span>') + '<span class="sp"></span>' +
       '<button type="button" class="tbtn" data-arch="' + esc((ui.workspace || model.workspace || '') + '|' + t.slug + '|1') + '">보관</button>' +
-      '<button type="button" class="tbtn' + (p.done === 'hide' ? ' on' : '') + '" data-sv="hide" aria-pressed="' + (p.done === 'hide') + '">끝남 숨김 <kbd>H</kbd></button>' +
-      '<button type="button" class="tbtn' + (filterOpen || filters.length ? ' on' : '') + '" data-sv="filter">' + ui.icon('i-filter', 'ni') + '필터 <kbd>F</kbd></button>' +
-      '<button type="button" class="tbtn' + (open === 'disp' ? ' on' : '') + '" data-sv="disp">' + ui.icon('i-disp', 'ni') + '보기</button></div>';
+      (decTab ? '' :
+        '<button type="button" class="tbtn' + (p.done === 'hide' ? ' on' : '') + '" data-sv="hide" aria-pressed="' + (p.done === 'hide') + '">끝남 숨김 <kbd>H</kbd></button>' +
+        '<button type="button" class="tbtn' + (filterOpen || filters.length ? ' on' : '') + '" data-sv="filter">' + ui.icon('i-filter', 'ni') + '필터 <kbd>F</kbd></button>' +
+        '<button type="button" class="tbtn' + (open === 'disp' ? ' on' : '') + '" data-sv="disp">' + ui.icon('i-disp', 'ni') + '보기</button>') + '</div>';
     if (filters.length) {
       h += '<div class="fbar">' + filters.map((f, i) => chip(f, i, esc)).join('') +
         '<button type="button" class="addf" data-sv="filter">+ 필터</button><button type="button" class="clr" data-sv="clear">지우기</button></div>';
     }
-    h += '<div class="sbody"><div class="view slist">' + Flow.list(t, 0, ui, p) + '</div>' + props(t, model, ui) + '</div>';
-    if (open === 'disp') h += display(p, esc);
+    const body = !decTab ? Flow.list(t, 0, ui, p)
+      : (t.rows || []).some((r) => r && r.kind === 'decision') && ui.decMenu ? ui.decMenu(t)
+        : '<div class="empty">이 시트에는 결정이 없어요</div>';
+    h += '<div class="sbody"><div class="view ' + (decTab ? 'sdec' : 'slist') + '">' + body + '</div>' + props(t, model, ui) + '</div>';
+    if (!decTab && open === 'disp') h += display(p, esc);
     if (filterOpen) h += filterMenu(open.split(':')[1] || '', t, esc);
     return h + '</main>';
   }

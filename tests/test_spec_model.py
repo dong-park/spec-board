@@ -14,6 +14,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "spec_board"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _store  # noqa: F401  사람 칸 저장소를 임시 폴더로
 
 import sheet
 import spec_model as sm
@@ -233,7 +235,7 @@ class ImpossibleTest(Tmp):
         r = Repo(self.tmp)
         r.node("n1", "끝남", check="필요")
         r.write_spec()
-        nf = r.dir / "rows" / "nodes"
+        nf = sm.local_dir(r.dir) / "nodes"
         nf.mkdir(parents=True, exist_ok=True)
         (nf / "n1.json").write_text(json.dumps({"id": "n1", "user": {"verdict": "고쳐줘", "fix": "여백"}}))
         _, n, _ = r.board()
@@ -419,14 +421,14 @@ class WriteTest(Tmp):
     def test_node_verdict_roundtrip_creates_file_and_shows_on_board(self):
         code, j = self.node({"verdict": "통과"}, {"verdict": ""})
         self.assertEqual((code, j["user"]["verdict"]), (200, "통과"))
-        f = self.r.dir / "rows" / "nodes" / "n1.json"
+        f = sm.node_file(self.r.dir, "n1")
         self.assertEqual(json.loads(f.read_text())["user"]["verdict"], "통과")
         _, b = self.call("GET", f"/api/board?w={self.ws}")
         self.assertEqual(b["projects"][0]["tickets"][0]["nodes"][0]["verdict"], "통과")
 
     def test_node_write_only_touches_user_cells(self):
         self.node({"verdict": "고쳐줘", "fix": "여백", "state": "끝남", "id": "x"})
-        d = json.loads((self.r.dir / "rows" / "nodes" / "n1.json").read_text())
+        d = json.loads((sm.node_file(self.r.dir, "n1")).read_text())
         self.assertEqual(d["id"], "n1")
         self.assertEqual(d["user"], {"verdict": "고쳐줘", "fix": "여백"})
         self.assertNotIn("state", d)
@@ -434,7 +436,7 @@ class WriteTest(Tmp):
 
     def test_new_node_file_has_full_shape(self):
         self.node({"fix": "x"})
-        d = json.loads((self.r.dir / "rows" / "nodes" / "n1.json").read_text())
+        d = json.loads((sm.node_file(self.r.dir, "n1")).read_text())
         self.assertEqual(d["user"], {"verdict": "", "fix": "x"})
 
     def test_node_bad_verdict_and_unknown_node_and_unknown_ticket(self):
@@ -442,7 +444,7 @@ class WriteTest(Tmp):
         self.assertEqual(self.node({"verdict": "통과"}, nid="n99")[0], 404)
         self.assertEqual(self.node({"verdict": "통과"}, sheet_slug="g/none")[0], 404)
         self.assertEqual(self.node({"verdict": "통과"}, nid="../x")[0], 404)
-        self.assertFalse((self.r.dir / "rows" / "nodes").exists() and any((self.r.dir / "rows" / "nodes").iterdir()))
+        self.assertFalse((sm.local_dir(self.r.dir) / "nodes").exists() and any((sm.local_dir(self.r.dir) / "nodes").iterdir()))
 
     def test_t19_second_writer_gets_409_and_first_answer_survives(self):
         """폰이 A로 답한 뒤 데스크톱이 같은 base로 B를 보내면 409, 파일엔 A가 남고 응답이 A를 돌려준다."""
@@ -451,7 +453,7 @@ class WriteTest(Tmp):
         code, j = self.node({"fix": "B"}, {"fix": ""})
         self.assertEqual(code, 409)
         self.assertEqual(j["user"]["fix"], "A")
-        d = json.loads((self.r.dir / "rows" / "nodes" / "n1.json").read_text())
+        d = json.loads((sm.node_file(self.r.dir, "n1")).read_text())
         self.assertEqual(d["user"]["fix"], "A")
         code, _ = self.node({"fix": "B"}, {"fix": "A"})   # 안내를 보고 다시 받은 값으로 고치면 된다
         self.assertEqual(code, 200)
@@ -460,7 +462,7 @@ class WriteTest(Tmp):
         post = lambda user, base=None: self.call("POST", f"/w/{self.ws}/api/ticket",
                                                   {"sheet": "g/t", "user": user, **({"base": base} if base else {})})
         code, j = post({"paused": True, "priority": "P0"}, {"paused": False, "priority": ""})
-        self.assertEqual((code, j["user"]), (200, {"paused": True, "priority": "P0", "archived": False}))
+        self.assertEqual((code, j["user"]), (200, {"paused": True, "priority": "P0", "archived": False, "wake": True}))
         code, j = post({"paused": False}, {"paused": False})
         self.assertEqual(code, 409)
         self.assertEqual(j["user"]["paused"], True)

@@ -7,12 +7,15 @@ import json
 import sys
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "spec_board"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _store  # noqa: F401  사람 칸 저장소를 임시 폴더로
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sheet
@@ -111,6 +114,80 @@ class SheetsApi(Tmp):
             sheet._SHEETS.clear()
 
 
+class InboxApi(Tmp):
+    """/api/inbox — 모든 워크스페이스의 결정·확인 대기를 한 모델로. 같은 시트 이름이 두 워크스페이스에 있어도 둘 다 나온다."""
+
+    def test_collects_every_workspace_and_skips_quiet_or_archived(self):
+        conf = mock.patch.object(sheet, "CONF", self.tmp / "no-roots")
+        conf.start()
+        self.addCleanup(conf.stop)
+        self.addCleanup(sheet._SHEETS.clear)
+        a, b, c = self.tmp / "a", self.tmp / "b", self.tmp / "c"
+        for d in (a, b, c):
+            d.mkdir()
+        ra = Repo(a); ra.node("n1", "확인 대기"); ra.row("D1", "decision"); ra.write_spec()
+        rb = Repo(b); rb.node("n1", "진행"); rb.row("D1", "decision"); rb.write_spec()   # 같은 시트 이름 g/t
+        rc = Repo(c); rc.node("n1", "진행"); rc.write_spec()                              # 결정도 확인도 없다
+        reg = sheet.Registry([a, b, c])
+        got = sheet.all_inbox(reg)
+        tickets = [(p["workspace"], t["slug"], t["workspace"], t["repo"]) for p in got["projects"] for t in p["tickets"]]
+        self.assertEqual(sorted(tickets), [("a", "g/t", "a", "a"), ("b", "g/t", "b", "b")])
+        self.assertEqual(sheet.all_inbox(reg, got["v"]), {"v": got["v"]}, "버전이 그대로면 본문 없이 버전만")
+
+        sheet.save_ticket_user(rb.dir, {"archived": True}, {"archived": False})
+        again = sheet.all_inbox(reg, got["v"])
+        self.assertNotEqual(again["v"], got["v"], "한 워크스페이스가 바뀌면 버전이 바뀐다")
+        self.assertEqual([p["workspace"] for p in again["projects"]], ["a"], "보관한 시트는 빠진다")
+
+
+class LiveEvents(Tmp):
+    """/api/events — 붙으면 hello, 파일이 바뀌면 바뀐 워크스페이스가 든 changed, 연결 수를 넘으면 503."""
+
+    def test_hello_then_changed_with_the_workspace_and_limit(self):
+        conf = mock.patch.object(sheet, "CONF", self.tmp / "no-roots")
+        conf.start()
+        self.addCleanup(conf.stop)
+        for k, v in (("TICK", 0.05), ("PING", 0.3), ("MAX", 1)):
+            p = mock.patch.object(sheet.LiveHub, k, v)
+            p.start()
+            self.addCleanup(p.stop)
+        a, b = self.tmp / "a", self.tmp / "b"
+        a.mkdir(); b.mkdir()
+        ra = Repo(a); ra.node("n1", "진행"); ra.write_spec()
+        rb = Repo(b); rb.node("n1", "진행"); rb.write_spec()
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), sheet.make_handler(sheet.Registry([a, b])))
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        url = f"http://127.0.0.1:{srv.server_address[1]}/api/events"
+        r = urllib.request.urlopen(url, timeout=5)
+        self.addCleanup(r.close)
+        self.assertEqual(r.headers["Content-Type"], "text/event-stream; charset=utf-8")
+
+        def frame():
+            lines = []
+            while True:
+                line = r.readline().decode().rstrip("\n")
+                if line == "" and lines:
+                    return lines
+                if line:
+                    lines.append(line)
+
+        hello = frame()
+        self.assertIn("event: hello", hello)
+        with self.assertRaises(urllib.error.HTTPError) as e:   # MAX=1 — 두 번째 연결은 거절
+            urllib.request.urlopen(url, timeout=5)
+        self.assertEqual(e.exception.code, 503)
+
+        rb.row("D9", "decision")   # 에이전트가 b에 결정을 하나 썼다
+        got = frame()
+        while got == [": ping"]:
+            got = frame()
+        self.assertEqual(got[0], "event: changed")
+        self.assertEqual(json.loads(got[1].removeprefix("data: "))["ws"], ["b"])
+
+
 class Archive(Tmp):
     def test_archived_flag_is_written_alone_and_leaves_the_counts(self):
         r = Repo(self.tmp); r.node("n1", "확인 대기"); r.row("D1", "decision", blocks=["n1"]); r.write_spec()
@@ -122,8 +199,8 @@ class Archive(Tmp):
         self.assertTrue(t["archived"])
         self.assertTrue(sm.sheet_summary(t)["archived"])
         self.assertEqual((b["summary"]["to_check"], b["summary"]["decisions_open"]), (0, 0), "보관한 시트는 Inbox·Decisions 숫자에 없다")
-        tj = json.loads((r.dir / "ticket.json").read_text(encoding="utf-8"))
-        self.assertEqual(tj["user"], {"priority": "", "paused": False, "archived": True})
+        tj = json.loads(sm.ticket_file(r.dir).read_text(encoding="utf-8"))
+        self.assertEqual(tj["user"], {"priority": "", "paused": False, "archived": True, "wake": True})
         with self.assertRaises(ValueError):
             sm.clean_ticket_user({"archived": "yes"})
         with self.assertRaises(sheet.Conflict):   # 다른 곳에서 먼저 바꿨다

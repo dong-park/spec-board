@@ -100,3 +100,40 @@ test('다른 워크스페이스의 시트 링크는 data-ws를 달아 화면이 
   assert.equal((h.match(/data-ws=/g) || []).length, 1, '같은 워크스페이스 시트는 해시 이동만');
   assert.ok(Sheet.reposHtml({ service: { port: 1 }, workspaces: [{ workspace: 'a', root: '/a', sheets: 1 }] }, { esc, color: () => 1 }).includes('data-ws="a"'));
 });
+
+
+test('속성 패널 결정 칸: 답할 것(막는 결정 먼저) → 반영 대기 → 끝남, 줄은 결정 모달을 연다', () => {
+  const d = (id, over) => ({ id, display_id: 'CRM-' + id, kind: 'decision', title: '결정 ' + id, status: '아직 안 함', reversible: true,
+    options: [{ key: 'A', label: '에이' }, { key: 'B', label: '비' }], recommend: 'A', user: { answer: '' }, ...over });
+  const t = { ...ticket, rows: [
+    d('D1', { status: '끝남', open: false, user: { answer: 'B' } }),
+    d('D2', { user: { answer: 'B' } }),
+    d('D3'),
+    d('D4', { reversible: false }),
+    { id: 'T1', kind: 'task', title: '할 일' },
+  ] };
+  const h = Sheet.props(t, model, ui);
+  assert.match(h, /결정 <span class="n">답할 2 · 전체 4<\/span>/);
+  const order = [...h.matchAll(/class="pdec is-(\w+)"[^>]*data-dec="([^"]+)"/g)].map((m) => m[2] + ':' + m[1]);
+  assert.deepEqual(order, ['CRM-D4:blk', 'CRM-D3:todo', 'CRM-D2:todo', 'CRM-D1:done']);
+  assert.match(h, /data-dec="CRM-D3" data-ticket="crm" data-dec-ws="a"/);
+  assert.match(h, /추천 A 에이 · 답 없으면 추천대로/);
+  assert.match(h, /답 B 비 · 반영 대기/);
+  assert.doesNotMatch(Sheet.props({ ...ticket, rows: [] }, model, ui), /pdec/, '결정이 없으면 칸도 없다');
+});
+
+
+
+test('결정 탭(#sd/): 탭 줄에 답할 수, 본문은 decMenu, 흐름 전용 버튼과 패널 결정 칸은 빠진다', () => {
+  const t = { ...ticket, rows: [{ id: 'D1', display_id: 'CRM-D1', kind: 'decision', title: '결정', status: '아직 안 함', user: { answer: '' }, options: [] }] };
+  const flow = Sheet.page(t, model, {}, null, ui);
+  assert.match(flow, /<a class="tab on" href="#s\/crm" aria-current="page">흐름<\/a><a class="tab" href="#sd\/crm">결정<span class="badge-dec">1<\/span><\/a>/);
+  assert.match(flow, /data-sv="filter"/);
+  const dec = Sheet.page(t, model, {}, 'filter', { ...ui, tab: 'dec', decMenu: (tk) => '<div class="dlist">메뉴 ' + tk.slug + '</div>' });
+  assert.match(dec, /<a class="tab on" href="#sd\/crm" aria-current="page">결정/);
+  assert.match(dec, /<div class="view sdec"><div class="dlist">메뉴 crm<\/div><\/div>/);
+  assert.doesNotMatch(dec, /data-sv="filter"|data-sv="hide"|data-sv-add|class="pdec/, '흐름 전용 버튼·필터 팝오버·패널 결정 칸 없음');
+  assert.match(dec, /data-arch="a\|crm\|1"/, '보관은 그대로');
+  assert.match(Sheet.page(ticket, model, {}, null, { ...ui, tab: 'dec' }), /이 시트에는 결정이 없어요/);
+});
+

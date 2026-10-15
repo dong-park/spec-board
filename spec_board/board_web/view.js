@@ -23,6 +23,14 @@
   const Verdict = (typeof module === 'object' && module.exports && typeof require === 'function')
     ? require('./verdict.js')
     : (typeof self !== 'undefined' ? self : globalThis).BoardVerdict;
+  // 실시간 알림(새 항목 고르기·문구·종 버튼). live.js는 view.js를 모른다.
+  const Live = (typeof module === 'object' && module.exports && typeof require === 'function')
+    ? require('./live.js')
+    : (typeof self !== 'undefined' ? self : globalThis).BoardLive || null;
+  // 보내기 묶음 바(board-wake). outbox.js는 view.js를 모른다.
+  const Ob = (typeof module === 'object' && module.exports && typeof require === 'function')
+    ? require('./outbox.js')
+    : (typeof self !== 'undefined' ? self : globalThis).BoardOutbox || null;
 
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -170,6 +178,7 @@
     let h = String(hash || '').replace(/^#/, '');
     try { h = decodeURIComponent(h); } catch (e) { /* 깨진 퍼센트 인코딩은 그대로 둔다 */ }
     if (!h) return { view: 'inbox', project: null };
+    if (h.startsWith('sd/')) return { view: 'sheet', project: null, sheet: h.slice(3), tab: 'dec' }; // 시트의 결정 탭
     if (h.startsWith('s/')) return { view: 'sheet', project: null, sheet: h.slice(2) };
     const i = h.lastIndexOf('/');
     if (i < 0) return { view: h, project: null };
@@ -191,9 +200,41 @@
     const ws = (model && model.workspace) || '';
     const sheets = ui0.sheets || Sheet.fromModel(model || {});
     const cur = { workspace: ws, slug: nav.view === 'sheet' ? nav.sheet : null };
-    return Sheet.side(sheets, cur, (model && model.summary) || {}, {
+    // Inbox·Decisions 숫자는 모든 레포 기준이다(/api/inbox를 받았으면). 못 받았으면 지금 워크스페이스 것.
+    // 둘 다 Inbox 목록과 같은 셈(사람이 아직 안 한 일)으로 센다 — 서버 summary는 답한 결정도 센다
+    const sum = Inbox ? globalSummary(ui0.glob || model || {}) : (model && model.summary) || {};
+    return Sheet.side(sheets, cur, sum, {
       esc, icon, view: nav.view, q: ui0.q, doneOpen: ui0.doneOpen, now: ui0.now, color: ticketColor, nav: navLink,
+      fresh: ui0.freshSheets, live: Live && ui0.live ? Live.liveLine(ui0.live) : '',
     });
+  }
+
+  /* ── 모든 레포 Inbox·Decisions ─────────────────────────
+     /api/inbox는 /api/board와 같은 모양(projects→tickets)이고 티켓마다 workspace·repo가 붙어 있다.
+     global 표시가 있으면 줄마다 출처 칩이 붙고, 답·판정은 그 줄의 워크스페이스로 간다. */
+  const GLOBAL_VIEWS = ['inbox', 'dec'];
+  const toGlobal = (j) => ({ global: true, workspace: '', local: !!(j && j.local), v: j && j.v, projects: (j && j.projects) || [] });
+
+  function globalSummary(g) {
+    const it = Inbox ? Inbox.items(g) : { decisions: [], checks: [], stuck: [] };
+    // 사이드바 Inbox 숫자 = 결정 + 확인 + 결정 없이 막힌 노드(Inbox 목록과 같은 셈)
+    return { decisions_open: it.decisions.length, to_check: it.checks.length + (it.stuck || []).length, decisions_blocking: Dec ? Dec.blockingCount(Dec.list(g)) : 0 };
+  }
+
+  // 레포 칩으로 거른 모델 — 같은 모양 그대로, 그 레포의 티켓만
+  function byRepo(g, repo) {
+    if (!repo) return g;
+    return { ...g, projects: (g.projects || []).map((p) => ({ ...p, tickets: (p.tickets || []).filter((t) => t.repo === repo) })).filter((p) => p.tickets.length) };
+  }
+
+  // 레포 칩 — 레포가 둘 이상일 때만. 숫자는 Inbox면 할 일, Decisions면 열린 결정
+  function repoChips(g, repo, view) {
+    const n = (m) => (view === 'dec' ? Dec.list(m).filter(Dec.isOpen).length : Inbox.count(m));
+    const repos = [...new Set((g.projects || []).flatMap((p) => (p.tickets || []).map((t) => t.repo)).filter(Boolean))].sort();
+    if (repos.length < 2) return '';
+    const chip = (key, label, cnt) => `<button type="button" class="rchip${(repo || '') === key ? ' on' : ''}" data-repo-f="${esc(key)}" aria-pressed="${(repo || '') === key}">` +
+      `${esc(label)} <span class="n">${cnt}</span></button>`;
+    return '<div class="rchips">' + chip('', '전체', n(g)) + repos.map((r) => chip(r, r, n(byRepo(g, r)))).join('') + '</div>';
   }
 
   const VIEW_NAME = { inbox: 'Inbox', dec: 'Decisions', project: 'Overview', tickets: 'Tickets', list: 'Issues', board: 'Board', wave: 'Waves', flow: 'Flow', archive: '보관', repos: 'Repos & 서비스' };
@@ -207,7 +248,8 @@
     const p = projects.find((x) => x.key === nav.project);
     // 종합 화면은 프로젝트가 있어야 뜬다 — 못 찾으면 티켓 목록으로 떨어진다.
     if (nav.view === 'project' && !(p && Proj)) nav = Object.assign({}, nav, { view: 'tickets' });
-    const crumb = (p ? `${esc(slugOf(p))} › ` : '') + `<b>${esc(VIEW_NAME[nav.view] || nav.view || '')}</b>`;
+    const crumb = (p ? `${esc(slugOf(p))} › ` : '') + `<b>${esc(VIEW_NAME[nav.view] || nav.view || '')}</b>` +
+      (ui0 && ui0.glob && GLOBAL_VIEWS.includes(nav.view) ? ' <span class="cs">모든 레포</span>' : '');
     let body = '';
     const scope = p ? [p] : projects;
     const tickets = scope.flatMap((pr) => pr.tickets || []);
@@ -215,14 +257,21 @@
     if (nav.view === 'sheet') {
       const t = projects.flatMap((pr) => pr.tickets || []).find((x) => x.slug === nav.sheet);
       if (!t) return '<main class="main surface"><div class="top"><div class="crumb"><b>Sheet</b></div></div><div class="view"><div class="empty">이 시트를 못 찾았어요</div></div></main>';
-      return Sheet.page(t, model, ui0 && ui0.prefs, ui0 && ui0.pop, ui);
+      // 결정 탭 — Decisions 화면과 같은 목록을 이 시트 하나로 좁혀 그린다(줄을 누르면 같은 결정 모달)
+      const decMenu = (tk) => (Dec ? Dec.menu({ workspace: model.workspace, projects: [{ key: (projects.find((pr) => (pr.tickets || []).includes(tk)) || {}).key, tickets: [tk] }] }, { short: true }) : '');
+      return Sheet.page(t, model, ui0 && ui0.prefs, ui0 && ui0.pop, { ...ui, tab: nav.tab, decMenu, owners: ((ui0 && ui0.outbox) || {}).owners });
     }
     if (nav.view === 'project') {
       body = Proj.html(p, model, ui);
     } else if (nav.view === 'dec' && Dec) {
-      body = Dec.menu(model);
+      const g = ui0 && ui0.glob;
+      body = g ? repoChips(g, ui0.repo, 'dec') + Dec.menu(byRepo(g, ui0.repo)) : Dec.menu(model);
     } else if (nav.view === 'inbox' && Inbox) {
-      body = Inbox.html(model, { state: inboxState });
+      const u = ui0 || {};
+      const g = u.glob;
+      const bar = '<div class="ibar">' + (g ? repoChips(g, u.repo, 'inbox') : '') + '<span class="sp"></span>' +
+        (Live && u.notify ? Live.bell(u.notify.prefs, u.notify.open, u.notify.support) : '') + '</div>';
+      body = bar + Inbox.html(g ? byRepo(g, u.repo) : model, { state: inboxState, fresh: u.fresh });
     } else if (nav.view === 'archive') {
       body = Sheet.archiveHtml((ui0 && ui0.sheets) || Sheet.fromModel(model || {}), { workspace: model && model.workspace }, ui);
     } else if (nav.view === 'repos') {
@@ -265,11 +314,13 @@
       sym('i-filter', 16, `<path d="M2.5 4.5h11M4.5 8h7M6.5 11.5h3" ${line} stroke-linecap="round"/>`) +
       sym('i-disp', 16, `<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" ${line}/><circle cx="5" cy="4.5" r="1.4" fill="currentColor"/><circle cx="11" cy="8" r="1.4" fill="currentColor"/><circle cx="7" cy="11.5" r="1.4" fill="currentColor"/>`) +
       sym('i-cube', 16, `<path d="M8 1.8l5.5 3v6.4L8 14.2l-5.5-3V4.8z M2.5 4.8L8 7.8l5.5-3 M8 7.8v6.4" ${line} stroke-linejoin="round"/>`) +
+      sym('i-bell', 16, `<path d="M4 11V7a4 4 0 0 1 8 0v4l1.2 1.5H2.8zM6.5 14h3" ${line} stroke-linejoin="round"/>`) +
       '</defs></svg>';
   }
 
   // ui = { inbox } — 어느 화면에서나 같은 틀이다. 좁은 화면 배치는 board.css가 맡는다.
-  const page = (model, nav, ui) => sprite() + sidebar(model, nav, ui) + stage(model, nav, ui);
+  const page = (model, nav, ui) => sprite() + sidebar(model, nav, ui) + stage(model, nav, ui) + (Live && ui && ui.toast ? Live.toast(ui.toast) : '') +
+    (Ob && ui && ui.outbox ? Ob.bar(ui.outbox, Date.now() / 1000, ui.obDl) : '');
 
   // `/api/board`는 w가 없으면 보드 없이 {workspaces:[{workspace, tickets, …}]} 목록만 준다 (성능).
   // 정적 ?src= JSON은 보드가 든 {workspaces:[…]}일 수도 있다 — 그때는 pick이 고른다.
@@ -328,6 +379,11 @@
     const srcFor = () => safeSrc(q.get('src'), '/api/board' + (w ? '?w=' + encodeURIComponent(w) : ''));
     let model = null;
     let inbox = null;
+    let glob = null;      // /api/inbox — 모든 레포의 결정·확인. Inbox·Decisions 화면과 사이드바 숫자가 쓴다
+    let repoF = '';       // Inbox·Decisions의 레포 칩 (빈 값 = 전체)
+    const isGlobalView = () => GLOBAL_VIEWS.includes(parseHash(location.hash).view);
+    // 지금 화면이 읽는 모델 — Inbox·Decisions면 모든 레포, 그 밖은 지금 워크스페이스. 모달·컨트롤러가 이것을 본다
+    const active = () => (glob && isGlobalView() ? glob : model);
     const waves = new Map();
     const tix = new Set(); // Tickets 화면에서 기본과 반대로 접거나 편 "티켓|칸"
     // 시트 화면 — 보기 설정은 브라우저에 남기고, 팝오버·찾기 글자·사이드바 끝남 펼침은 이 탭에만 둔다
@@ -342,9 +398,42 @@
     const localDay = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
     let last = '';        // 마지막으로 그린 HTML — 같으면 다시 그리지 않는다 (깜빡임·스크롤 튐 없음)
     let lastRoute = null; // 같은 화면을 다시 그릴 때만 스크롤을 되돌린다
+    /* 실시간 알림 상태 — live.js가 고른 새 항목을 "새" 표시·탭 제목·화면 안 알림·데스크톱 알림으로 보여 준다 */
+    const NOTIFY_KEY = 'spec-board.notify';
+    const FRESH_MS = 30000;   // "새" 표시는 탭을 보고 있는 동안 30초(또는 줄을 누를 때까지)
+    let live = q.get('src') ? '' : 'off'; // 사이드바 연결 상태 — ok · retry · off(3초마다 묻기)
+    let stale = false;    // 탭이 안 보이거나 입력 중이라 미뤄 둔 다시 받기
+    let seen = null;      // 직전 /api/inbox의 할 일 Map — 처음 받은 것은 기준만
+    const fresh = new Map(); // 새 항목 키 → 사라질 시각(아직 탭을 안 봤으면 null)
+    let unseen = 0;       // Inbox·Decisions를 보기 전까지 쌓인 새 항목 수 — 탭 제목 숫자
+    let toast = null, toastT = 0;
+    let nprefs = Live ? Live.load((() => { try { return localStorage.getItem(NOTIFY_KEY); } catch (e) { return null; } })()) : null;
+    let ntOpen = false;   // 알림 설정 팝오버
+    let obView = null, obDl = {}; // /api/outbox — 보내기 묶음과 남은 시간 마감(ms)
+    const saveNotify = () => { try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(nprefs)); } catch (e) { /* 이번 탭에서만 */ } };
+    const support = () => (typeof Notification === 'undefined' ? 'no' : Notification.permission === 'denied' ? 'denied' : 'yes');
+    // 지금 보이는 "새" 키와 그 시트들. 탭을 보고 있으면 아직 시계가 안 간 키의 30초를 시작한다
+    const freshNow = () => {
+      const now = Date.now();
+      const vis = document.visibilityState !== 'hidden';
+      const keys = new Set(), sheetsNew = new Set();
+      for (const [k, at] of [...fresh]) {
+        if (at == null && vis) { fresh.set(k, now + FRESH_MS); setTimeout(draw, FRESH_MS + 50); }
+        else if (at != null && at <= now) { fresh.delete(k); continue; }
+        keys.add(k);
+        const [, ws, slug] = k.split('|');
+        sheetsNew.add(ws + '|' + slug);
+      }
+      return { keys, sheetsNew };
+    };
     const draw = () => {
       if (!model) { el.innerHTML = ''; last = ''; return; }
-      const html = page(model, parseHash(location.hash), { inbox: inbox && inbox.view(), waves, tix, sheets, repos, prefs, pop, q: sq, doneOpen, today: localDay() });
+      if (document.visibilityState !== 'hidden' && isGlobalView()) unseen = 0;
+      if (Live) document.title = Live.title(unseen);
+      const fr = freshNow();
+      const html = page(model, parseHash(location.hash), { inbox: inbox && inbox.view(), glob, repo: repoF, waves, tix, sheets, repos, prefs, pop, q: sq, doneOpen, today: localDay(),
+        fresh: fr.keys, freshSheets: fr.sheetsNew, live, toast, notify: nprefs && { prefs: nprefs, open: ntOpen, support: support() },
+        outbox: obView, obDl });
       if (html === last) return;
       const route = location.hash;
       const keep = route === lastRoute;
@@ -357,6 +446,7 @@
       last = html;
       lastRoute = route;
       paint(el); // 열 너비를 먼저 복원해야 가로 스크롤이 0으로 제한되지 않는다
+      document.body.classList.toggle('has-obar', !!el.querySelector('.obar'));
       const v = el.querySelector('.view'); if (v) { v.scrollTop = top; v.scrollLeft = left; }
       const s = el.querySelector('.side'); if (s) s.scrollTop = side;
       if (focus && focus.waveChoice) {
@@ -382,6 +472,68 @@
     }).then((m) => { model = pick(m, w); draw(); });
     // 사이드바 시트 목록 — 모든 워크스페이스. 정적 ?src=면 묻지 않고 모델에서 만든다
     const loadSheets = () => (q.get('src') ? Promise.resolve() : Promise.all([getJson('/api/sheets').then((j) => { sheets = j.sheets || null; }), getJson('/api/repos').then((j) => { repos = j; }).catch(() => {})]).then(draw).catch(() => {}));
+    // 모든 레포 Inbox — 가진 버전을 보내면 그대로일 때 서버가 버전만 준다. 정적 ?src=면 지금 모델로 그린다
+    const loadInbox = () => (q.get('src') ? Promise.resolve() : getJson('/api/inbox' + (glob && glob.v ? '?v=' + encodeURIComponent(glob.v) : ''))
+      .then((j) => { if (j.projects) { glob = toGlobal(j); onInbox(); draw(); } }).catch(() => {}));
+    // 보내기 묶음 — 사람이 답한 것이 언제 어느 스레드로 가는지
+    const loadOutbox = () => (q.get('src') || !Ob ? Promise.resolve() : getJson('/api/outbox')
+      .then((j) => { obView = j; obDl = Ob.deadlines(j, Date.now()); draw(); }).catch(() => {}));
+    const obPost = (body) => postJson('/api/outbox', body).then((r) => { if (r.json && r.json.bundles) { obView = r.json; obDl = Ob.deadlines(r.json, Date.now()); } draw(); }).catch(() => {});
+    // 남은 시간 글자만 1초마다 — 다시 그리지 않는다. 0이 되면 서버가 보냈을 테니 한 번 다시 받는다
+    if (Ob) setInterval(() => {
+      let due = false;
+      el.querySelectorAll('[data-ob-left]').forEach((s) => {
+        const t = Number(s.getAttribute('data-ob-left'));
+        if (!t) return;
+        const sec = (t - Date.now()) / 1000;
+        s.textContent = Ob.left(sec);
+        if (sec < -2) due = true;
+      });
+      if (due && live !== "ok") loadOutbox();
+    }, 1000);
+
+    /* 새로 생긴 할 일 — "새" 표시를 달고, 보고 있으면 화면 안 알림, 안 보고 있으면(탭이 숨었거나 다른 앱에 있으면) 데스크톱 알림 */
+    function onInbox() {
+      if (!Live) return;
+      const now = Live.todo(glob);
+      const add = Live.added(seen, now);
+      seen = now;
+      for (const k of [...fresh.keys()]) if (!now.has(k)) fresh.delete(k); // 다른 곳에서 답했다
+      if (!add.length) return;
+      for (const x of add) fresh.set(x.key, null);
+      const visible = document.visibilityState !== 'hidden';
+      const looking = visible && document.hasFocus();
+      if (!(looking && isGlobalView())) unseen += add.length;
+      if (visible) {
+        toast = add;
+        clearTimeout(toastT);
+        toastT = setTimeout(() => { toast = null; draw(); }, 8000);
+      }
+      if (!looking) notifyDesktop(add);
+    }
+    function notifyDesktop(add) {
+      if (!nprefs || !nprefs.on || support() !== 'yes' || Notification.permission !== 'granted') return;
+      const want = Live.wanted(add, nprefs);
+      if (!want.length) return;
+      const n = Live.notice(want);
+      try {
+        const no = new Notification(n.title, { body: n.body, tag: n.tag });
+        no.onclick = () => { window.focus(); no.close(); openItem(n.item); };
+      } catch (e) { /* 알림을 못 띄우는 브라우저 — 탭 제목 숫자는 남는다 */ }
+    }
+    // 알림을 누르면 — Inbox로 가서 그 결정 모달(확인이면 노드 모달)을 연다. 묶음 알림이면 Inbox만
+    function openItem(item) {
+      if (location.hash !== '#inbox') location.hash = '#inbox';
+      draw();
+      if (!item) return;
+      fresh.delete(item.key);
+      setTimeout(() => {
+        if (item.dec) { if (ctl) ctl.open(item.ticket, item.dec, item.ws); return; }
+        const esc2 = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'));
+        const n = el.querySelector('.iopen[data-ws="' + esc2(item.ws) + '"][data-tkt="' + esc2(item.ticket) + '"][data-key="' + esc2(item.node) + '"]');
+        if (n) n.click();
+      }, 50);
+    }
 
     /* 실시간 — 3초마다 버전만 묻고, 바뀌었을 때만 보드를 받아 다시 그린다. 탭이 안 보이면 묻지 않는다.
        입력칸에 쓰는 중이면 그 차례를 건너뛴다 — 버전이 그대로 다르니 다음 차례에 다시 받는다.
@@ -394,14 +546,94 @@
     let ticks = 0;
     const tick = () => {
       if (q.get('src') || !model || !model.workspace || document.visibilityState === 'hidden') return;
-      if (++ticks % 5 === 0) loadSheets(); // 다른 워크스페이스의 변화는 15초마다
+      if (live === 'ok') { // SSE가 신호를 주니 묻지 않는다 — 미뤄 둔 다시 받기만
+        if (stale && !typing()) { stale = false; load().then(loadSheets).catch(() => {}); loadInbox(); }
+        return;
+      }
+      if (++ticks % 5 === 0) { loadSheets(); loadOutbox(); } // 다른 워크스페이스의 변화·보내기 묶음은 15초마다
+      if ((isGlobalView() || ticks % 5 === 0) && !typing()) loadInbox(); // Inbox·Decisions를 보는 중이면 3초마다, 아니면 사이드바 숫자만 15초마다
       getJson('/api/version?w=' + encodeURIComponent(model.workspace)).then((j) => {
         online(true);
         if (j.v !== model.v && !typing()) return load().then(loadSheets);
       }).catch(() => online(false));
     };
     setInterval(tick, 3000);
-    document.addEventListener('visibilitychange', tick);
+    document.addEventListener('visibilitychange', () => { tick(); draw(); });
+
+    /* SSE — 서버가 "바뀌었다"만 알린다. 받으면 Inbox는 늘(숨은 탭도 — 알림을 띄우려고), 보드·시트 목록은 보일 때만 다시 받는다.
+       끊기면 EventSource가 3초 뒤 다시 붙고 그동안은 위의 3초 묻기로 돌아간다. 다시 붙으면 hello로 놓친 것을 따라잡는다. */
+    const onChanged = (wsList) => {
+      loadInbox();
+      if (document.visibilityState === 'hidden' || typing()) { stale = true; return; }
+      if (!wsList || !model || wsList.includes(model.workspace)) load().catch(() => {});
+      loadSheets();
+    };
+    if (!q.get('src') && typeof EventSource !== 'undefined') {
+      const es = new EventSource('/api/events');
+      es.addEventListener('hello', () => { live = 'ok'; onChanged(null); draw(); });
+      es.addEventListener('changed', (e) => { let j = {}; try { j = JSON.parse(e.data); } catch (err) { /* 신호만 쓴다 */ } onChanged(j.ws || null); });
+      es.addEventListener('outbox', () => loadOutbox());
+      es.onerror = () => { live = es.readyState === 2 ? 'off' : 'retry'; draw(); };
+    }
+
+    // 알림 설정 팝오버·화면 안 알림·"새" 줄 누르기
+    el.addEventListener('click', async (e) => {
+      const c = (s) => (e.target.closest ? e.target.closest(s) : null);
+      if (c('[data-nt-pop]')) { ntOpen = !ntOpen; return draw(); }
+      if (c('[data-nt-on]')) {
+        let perm = 'denied';
+        try { perm = await Notification.requestPermission(); } catch (err) { /* 권한을 못 물었다 */ }
+        nprefs.on = perm === 'granted';
+        saveNotify();
+        ntOpen = !nprefs.on; // 거절되면 팝오버에 막혔다고 보여 준다
+        return draw();
+      }
+      if (c('[data-nt-off]')) { nprefs.on = false; saveNotify(); ntOpen = false; return draw(); }
+      if (c('[data-nt-later]')) { ntOpen = false; return draw(); }
+      if (ntOpen && !c('[data-nt]')) { ntOpen = false; draw(); }
+      if (c('[data-toast-go]')) { toast = null; location.hash = '#inbox'; return draw(); }
+      if (c('[data-toast-x]')) { toast = null; return draw(); }
+      let ob;
+      if ((ob = c('[data-ob-flush]'))) return void obPost({ action: 'flush', thread: ob.getAttribute('data-ob-flush') });
+      if ((ob = c('[data-ob-hold]'))) return void obPost({ action: 'hold', thread: ob.getAttribute('data-ob-hold') });
+      if ((ob = c('[data-ob-release]'))) return void obPost({ action: 'release', thread: ob.getAttribute('data-ob-release') });
+      const wk = c('[data-wake]');
+      if (wk) { // 깨우기 켬/끔 — ticket.json user.wake만 쓴다. 다른 곳에서 먼저 바꿨으면 서버 값으로 다시 그린다
+        const [ws, slug, on] = wk.getAttribute('data-wake').split('|');
+        e.preventDefault();
+        await postJson('/w/' + encodeURIComponent(ws) + '/api/ticket', { sheet: slug, user: { wake: on === '1' }, base: { wake: on !== '1' } }).catch(() => {});
+        await load().catch(() => {});
+        return void loadOutbox();
+      }
+      const nu = c('[data-nudge]');
+      if (nu) { // 반영 대기 N건 보내기 — 서버가 반영 안 된 사람 입력을 담당 스레드에 바로 보낸다
+        const [ws, slug] = nu.getAttribute('data-nudge').split('|');
+        nu.disabled = true;
+        const res = await postJson('/api/outbox', { action: 'nudge', ws, sheet: slug }).catch(() => ({ json: {} }));
+        if (res.json && res.json.bundles) { obView = res.json; obDl = Ob.deadlines(res.json, Date.now()); }
+        else if (res.json && res.json.error) window.alert(res.json.error);
+        return draw();
+      }
+      const row = c('.irow[data-in]');
+      if (row && fresh.size) {
+        const d = row.dataset;
+        const key = (d.in === 'dec' ? 'd|' : 'c|') + (d.inWs || '') + '|' + d.inTicket + '|' + (d.in === 'dec' ? d.inDec : d.inKey);
+        if (fresh.delete(key)) setTimeout(draw, 0); // 다른 손잡이(답하기·모달)가 먼저 돌게 한 차례 미룬다
+      }
+    });
+    el.addEventListener('change', (e) => {
+      const os = e.target.matches && e.target.matches('[data-owner-sel]') ? e.target : null;
+      if (os && os.value) { // 담당 정하기 — 저장소 agent.json만 쓴다
+        const [ws, slug] = os.getAttribute('data-owner-sel').split('|');
+        postJson('/api/owner', { ws, sheet: slug, thread: os.value })
+          .then((res) => { if (res.json && res.json.owners) obView = res.json; return load(); }).catch(() => {});
+        return;
+      }
+      const o = e.target.matches && e.target.matches('[data-nt-opt]') ? e.target : null;
+      if (!o) return;
+      nprefs[o.dataset.ntOpt] = !!o.checked;
+      saveNotify();
+    });
     const layer = document.createElement('div');
     layer.className = 'layer';
     document.body.appendChild(layer);
@@ -409,7 +641,7 @@
     const drawLayer = () => {
       const d = ctl && ctl.current();
       const hadText = document.activeElement && document.activeElement.matches && document.activeElement.matches('[data-dec-text]');
-      layer.innerHTML = d ? modalShell(Dec.modalParts(d, ctl.view(), model)) : '';
+      layer.innerHTML = d ? modalShell(Dec.modalParts(d, ctl.view(), active())) : '';
       const ta = layer.querySelector('[data-dec-text]');
       if (ta && (hadText || ctl.state.focusText)) {
         ctl.state.focusText = false;
@@ -419,18 +651,18 @@
     };
     if (Dec) {
       ctl = Dec.controller({
-        getModel: () => model, post: postJson, onChange: drawLayer,
-        onSaved: () => { draw(); load().catch(() => {}); },
-        onConflict: () => { draw(); load().catch(() => {}); },
+        getModel: active, post: postJson, onChange: drawLayer,
+        onSaved: () => { draw(); load().catch(() => {}); loadInbox(); },
+        onConflict: () => { draw(); load().catch(() => {}); loadInbox(); },
       });
     }
 
     // Inbox 줄의 선택지·통과·고쳐줘 — 답하기·확인은 결정 모달·노드 모달과 같은 컨트롤러가 쓴다
     if (Inbox) {
       inbox = Inbox.controller({
-        getModel: () => model, fetch: (u, i) => fetch(u, i), redraw: draw,
-        onSaved: () => { draw(); load().catch(() => {}); },
-        onConflict: () => { draw(); load().catch(() => {}); },
+        getModel: active, fetch: (u, i) => fetch(u, i), redraw: () => { draw(); },
+        onSaved: () => { draw(); load().catch(() => {}); loadInbox(); },
+        onConflict: () => { draw(); load().catch(() => {}); loadInbox(); },
       });
       Inbox.bind(el, inbox);
     }
@@ -485,13 +717,16 @@
         return draw();
       }
       if (e.target.closest && e.target.closest('[data-sheet-fold]')) { doneOpen = !doneOpen; return draw(); }
+      const rf = e.target.closest && e.target.closest('[data-repo-f]');
+      if (rf) { repoF = rf.getAttribute('data-repo-f') || ''; e.preventDefault(); return draw(); }
       if (pop && !(e.target.closest && e.target.closest('[data-pop]'))) { pop = null; draw(); }
     }, true);
     el.addEventListener('input', (e) => {
       if (e.target.matches && e.target.matches('[data-sheet-q]')) { sq = e.target.value; draw(); }
     });
     document.addEventListener('keydown', (e) => {
-      if (parseHash(location.hash).view !== 'sheet' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const nv = parseHash(location.hash);
+      if (nv.view !== 'sheet' || nv.tab === 'dec' || e.metaKey || e.ctrlKey || e.altKey) return; // H·F는 흐름 탭 몫
       if (e.target.matches && e.target.matches('input,textarea,select')) return;
       if ((ctl && ctl.current()) || document.querySelector('.layer .modal, .tm-box, .nm')) return; // 모달이 열려 있으면 모달 몫
       const k = e.key.toLowerCase();
@@ -507,14 +742,14 @@
         return draw();
       }
       const t = ctl && e.target.closest && e.target.closest('[data-dec]');
-      if (!t || !ctl.open(t.getAttribute('data-ticket'), t.getAttribute('data-dec'))) return;
+      if (!t || !ctl.open(t.getAttribute('data-ticket'), t.getAttribute('data-dec'), t.getAttribute('data-dec-ws'))) return;
       e.preventDefault(); e.stopPropagation(); // 카드 자체의 눌림(노드 모달)과 겹치지 않게
     });
     el.addEventListener('keydown', (e) => {
-      const t = ctl && e.target.closest && e.target.closest('.drow[data-dec], .it[data-dec]');
+      const t = ctl && e.target.closest && e.target.closest('.drow[data-dec], .it[data-dec], .pdec[data-dec]');
       if (t && (e.key === 'Enter' || e.key === ' ')) {
         e.preventDefault();
-        ctl.open(t.getAttribute('data-ticket'), t.getAttribute('data-dec'));
+        ctl.open(t.getAttribute('data-ticket'), t.getAttribute('data-dec'), t.getAttribute('data-dec-ws'));
       }
     });
     layer.addEventListener('click', (e) => {
@@ -540,8 +775,8 @@
 
     // 뒤에서 붙는 모달(티켓·노드)이 모델을 읽고 다시 그리게 손잡이를 준다
     return load()
-      .then(() => { loadSheets(); })
-      .then(() => ({ getModel: () => model, redraw: draw }))
+      .then(() => { loadSheets(); loadInbox(); loadOutbox(); })
+      .then(() => ({ getModel: active, redraw: draw }))
       .catch((e) => { el.innerHTML = `<main class="main surface"><div class="view"><div class="empty">보드를 못 읽었어요 (${esc(e.message)})</div></div></main>`; });
   }
 

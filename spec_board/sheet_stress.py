@@ -6,7 +6,7 @@
 --no-base는 대조군이다. base를 안 보내면 잃는 답이 나와야 한다 — 안 나오면 이 검증이 눈먼 것이다.
 
 임시 레포 2개를 만들고 sheet.py를 빈 포트에 띄운다.
-행(rows/Dn.json) 외에 노드 사람 칸(rows/nodes/n1.json)과 ticket.json도 같이 친다 — 같은 잠금·같은 판정이다.
+행(rows/Dn.json) 외에 노드 사람 칸(저장소 nodes/n1.json)과 ticket.json도 같이 친다 — 같은 잠금·같은 판정이다.
 각 클라이언트는 자기가 마지막으로 본 값을 base로 보낸다. 200이면 (base → new)를 기록한다.
 판정: 칸마다 200 받은 저장들이 "" 에서 시작해 한 줄로 이어지고, 그 끝이 파일의 최종 값이다.
 두 저장이 같은 base를 딛고 둘 다 200이면 하나가 조용히 사라진 것이다 — 실패.
@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import socket
 import subprocess
@@ -24,6 +25,11 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# 사람 칸 저장소를 임시 폴더로 — 서버 자식 프로세스도 이 환경을 물려받는다
+os.environ.setdefault("SPEC_BOARD_STORE", tempfile.mkdtemp(prefix="spec-board-stress-"))
+import spec_model as sm  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 ROWS = ["D1", "D2", "D3"]
@@ -116,8 +122,8 @@ def main() -> int:
 
     lost, broken = 0, []
     where = {"user": lambda r, i: r / "spec/s/rows" / f"{i}.json",
-             "node": lambda r, i: r / "spec/s/rows/nodes" / f"{i}.json",
-             "ticket": lambda r, i: r / "spec/s/ticket.json"}
+             "node": lambda r, i: sm.node_file(r / "spec/s", i),
+             "ticket": lambda r, i: sm.ticket_file(r / "spec/s")}
     for ws, root in repos.items():
         for kind, rid, f in TARGETS:
             path = where[kind](root, rid)

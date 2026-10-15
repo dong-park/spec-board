@@ -17,11 +17,15 @@
       근거가 하나라도 없거나 상태 줄이 없으면 아무것도 옮기지 않고 거부한다. 중간에 실패하면 옮긴 것을 되돌린다.
 
   node_state.py verdict <브리프>
-      사람이 보드에서 남긴 통과·고쳐줘(rows/nodes/<노드>.json)를 브리프에 반영하고 그 칸을 비운다(D-R1).
+      사람이 보드에서 남긴 통과·고쳐줘(사람 칸 저장소 nodes/<노드>.json)를 브리프에 반영하고 그 칸을 비운다(D-R1).
       통과 → 상태 끝남. 고쳐줘 → 상태 진행 + `## 구현 메모`에 fix 한 줄. 한 번만 반영한다 — 칸이 비었으면 아무것도 안 한다.
       통과·고쳐줘는 상태가 확인 대기·끝남일 때만 받는다(진행 중이면 칸을 그대로 두고 applied:false). 같은 fix는 날짜와
       상관없이 구현 메모에 한 번만 쌓는다.
       /go가 턴 시작에 apply가 낸 kind=node 항목마다 부른다.
+
+  node_state.py comment <브리프> [--reply cN] [--resolve | --reopen] [--file <글 파일>|-]
+      노드 댓글 스레드에 에이전트 글을 덧붙인다(사람 칸 저장소 nodes/<노드>.json comments). 글은 파일이나 표준입력(--file -)으로만 받는다 —
+      사람 글을 인용해도 명령 인자에 싣지 않게. --reply 없이 쓰면 노드 전체에 새 스레드를 연다. --resolve는 스레드를 닫는다.
 
 티켓 폴더 = 브리프의 부모. rows/·evidence/가 그 밑에 있다. 노드 id는 브리프 파일 이름 앞토막(n7-... → n7).
 """
@@ -41,7 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sheet  # 행 잠금(rows/.lock)과 원자적 JSON 쓰기는 보드 서버·apply와 같은 것을 쓴다
-from spec_model import SIX, clean_path, node_file, norm_state   # 여섯 값은 states.json 한 곳
+from spec_model import SIX, clean_path, local_dir, node_file, norm_state   # 여섯 값은 states.json 한 곳
 
 ID_RE = re.compile(r"^D(\d+)\.json$")
 
@@ -300,7 +304,7 @@ def verdict(brief: Path, today: str | None = None) -> dict:
     _require_real(brief)
     if not f.exists():
         return {**base, "reason": "사람 칸 파일이 없다"}
-    if not clean_path(ticket, f):   # rows/·rows/nodes/·칸 파일이 심볼릭 링크 — 읽지도 쓰지도 않는다
+    if not clean_path(local_dir(ticket), f):   # 칸 파일이 심볼릭 링크 — 읽지도 쓰지도 않는다
         return {**base, "reason": "사람 칸 파일이 심볼릭 링크이거나 티켓 폴더 밖이다 — 칸을 그대로 둔다"}
     with locked(brief), sheet.locked(ticket):
         r = json.loads(f.read_text(encoding="utf-8"))
@@ -339,6 +343,56 @@ def verdict(brief: Path, today: str | None = None) -> dict:
     return {**base, "applied": True, "verdict": v, "status": target, "memo": memo}
 
 
+def comment(brief: Path, args) -> dict:
+    """에이전트 댓글 하나. 글: --file <파일> 또는 --file -(표준입력)."""
+    _require_real(brief)
+    text = sys.stdin.read() if args.file == "-" else (Path(args.file).read_text(encoding="utf-8") if args.file else "")
+    c: dict = {"text": text}
+    key = node_id(brief)
+    names = _comment_images(brief.parent, key, getattr(args, "image", []) or [])
+    if names:
+        c["images"] = names
+    if args.reply:
+        c["reply_to"] = args.reply
+    if args.resolve or args.reopen:
+        c["resolve"] = bool(args.resolve)
+    try:
+        cs = sheet.add_comment(brief.parent, key, c, "agent")
+    except BaseException:
+        for n in names:   # 댓글이 안 달렸으면 복사한 이미지도 남기지 않는다
+            (brief.parent / "evidence" / key / n).unlink(missing_ok=True)
+        raise
+    return {"node": key, "comment": cs[-1]["id"], "thread": args.reply or cs[-1]["id"]}
+
+
+COMMENT_IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+COMMENT_IMAGE_MAX = 20 * 1024 * 1024
+
+
+def _comment_images(ticket: Path, key: str, paths: list[str]) -> list[str]:
+    """스크린샷 파일을 evidence/<노드>/cm-<시각>-<i>.<확장자>로 복사하고 이름을 돌려준다(원본은 그대로)."""
+    if not paths:
+        return []
+    dest = ticket / "evidence" / key
+    _clean(ticket, dest, "evidence/")
+    srcs = [Path(p).expanduser() for p in paths]
+    for p in srcs:
+        if p.is_symlink() or not p.is_file():
+            raise SystemExit(f"이미지가 없거나 심볼릭 링크다: {p}")
+        if p.suffix.lower() not in COMMENT_IMAGE_EXT:
+            raise SystemExit(f"이미지 확장자가 아니다(png·jpg·webp·gif): {p}")
+        if p.stat().st_size > COMMENT_IMAGE_MAX:
+            raise SystemExit(f"이미지가 20MB를 넘는다: {p}")
+    dest.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
+    names = []
+    for i, p in enumerate(srcs, 1):
+        name = f"cm-{stamp}-{i}{p.suffix.lower()}"
+        shutil.copyfile(p, dest / name)
+        names.append(name)
+    return names
+
+
 # ── CLI ──────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -363,6 +417,15 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("brief")
     r.add_argument("--evidence", action="append", default=[])
 
+    c = sub.add_parser("comment", help="댓글 스레드에 에이전트 답을 단다(글은 파일·표준입력)")
+    c.add_argument("brief")
+    c.add_argument("--reply", default="", metavar="cN")
+    g = c.add_mutually_exclusive_group()
+    g.add_argument("--resolve", action="store_true")
+    g.add_argument("--reopen", action="store_true")
+    c.add_argument("--file", default="", metavar="<글 파일>|-")
+    c.add_argument("--image", action="append", default=[], metavar="<스크린샷>", help="이미지를 댓글에 붙인다(여러 번 쓸 수 있다)")
+
     v = sub.add_parser("verdict", help="사람의 통과·고쳐줘를 브리프에 반영하고 칸을 비운다")
     v.add_argument("brief")
     return p
@@ -373,6 +436,10 @@ def main(argv: list[str] | None = None) -> int:
     brief = _brief(args.brief)
     if args.cmd == "set":
         print(set_status(brief, args.status))
+        if args.status == "막힘":   # 결정 없는 막힘은 Inbox "막힘 · 보드에 질문 없음"에 뜬다 — 사람이 방향을 줄 실마리를 남기게
+            print("알림: 결정 없이 막힘으로 썼어요. 보드 Inbox의 '막힘 · 방향이 필요해요'에 뜹니다. "
+                  "spec-board node comment로 사유와 '풀려면:' 한 줄을 남기세요(Inbox가 사유로 보여 줍니다). "
+                  "사람에게 물을 선택이면 spec-board node block, 앞 작업·배포를 기다리는 거면 보류로 쓰세요.", file=sys.stderr)
     elif args.cmd == "block":
         row = block(brief, args.title, args.option, args.recommend,
                     args.given, args.when, args.then, args.reversible)
@@ -381,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(review(brief, args.evidence), ensure_ascii=False))
     elif args.cmd == "verdict":
         print(json.dumps(verdict(brief), ensure_ascii=False))
+    elif args.cmd == "comment":
+        print(json.dumps(comment(brief, args), ensure_ascii=False))
     return 0
 
 

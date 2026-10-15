@@ -14,6 +14,12 @@ const require = createRequire(import.meta.url);
 const M = require('./ticket_modal.js');
 const V = require('./view.js');
 const scripts = join(here, '..');
+// 사람 칸은 레포 밖 저장소에 있다 — 테스트는 임시 저장소를 쓰고, 파일 경로는 spec_model에게 묻는다
+const STORE = mkdtempSync(join(tmpdir(), 'spec-board-store-'));
+const ticketJson = (ticketDir) => execFileSync('python3', ['-c',
+  'import sys; sys.path.insert(0, sys.argv[1]); import spec_model as m; from pathlib import Path; print(m.ticket_file(Path(sys.argv[2])))',
+  scripts, ticketDir], { env: { ...process.env, SPEC_BOARD_STORE: STORE }, encoding: 'utf8' }).trim();
+
 
 // ── 픽스처: 시나리오 8개 중 1개 통과, 1개는 어느 노드도 안 맡음
 const row = (id, over) => ({
@@ -334,7 +340,7 @@ function tempRepo() {
 test('실제 sheet.py: /api/board 모델로 모달이 그려지고 멈춤이 ticket.json에 저장되며 낡은 base는 409다', async () => {
   const { root, ticketDir } = tempRepo();
   const port = await freePort();
-  const srv = spawn('python3', [join(scripts, 'sheet.py'), root, '--port', String(port), '--no-sessions'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const srv = spawn('python3', [join(scripts, 'sheet.py'), root, '--port', String(port), '--no-sessions'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, SPEC_BOARD_STORE: STORE } });
   try {
     await new Promise((ok, no) => {
       const to = setTimeout(() => no(new Error('서버가 안 떴다')), 8000);
@@ -364,9 +370,9 @@ test('실제 sheet.py: /api/board 모델로 모달이 그려지고 멈춤이 tic
     const io = { w: model.workspace, fetch: f };
     const a = await M.setPaused(hit.ticket, true, io);
     assert.deepEqual(a, { ok: true, paused: true });
-    const disk = JSON.parse(readFileSync(join(ticketDir, 'ticket.json'), 'utf8'));
+    const disk = JSON.parse(readFileSync(ticketJson(ticketDir), 'utf8'));
     assert.equal(disk.user.paused, true);
-    assert.deepEqual(Object.keys(disk.user).sort(), ['archived', 'paused', 'priority']);
+    assert.deepEqual(Object.keys(disk.user).sort(), ['archived', 'paused', 'priority', 'wake']);
     assert.equal(readdirSync(join(ticketDir, 'rows')).filter((x) => x.startsWith('T')).length, 3, '행 파일은 안 건드린다');
 
     // 낡은 화면(paused=false로 알고 있음)이 다시 멈추려 하면 서버가 거절하고 지금 값을 준다
@@ -374,7 +380,7 @@ test('실제 sheet.py: /api/board 모델로 모달이 그려지고 멈춤이 tic
     assert.equal(stale.conflict, true);
     assert.equal(stale.paused, true);
     assert.match(stale.message, /다른 곳에서 먼저 바꿨어요/);
-    assert.equal(JSON.parse(readFileSync(join(ticketDir, 'ticket.json'), 'utf8')).user.paused, true, '덮지 않았다');
+    assert.equal(JSON.parse(readFileSync(ticketJson(ticketDir), 'utf8')).user.paused, true, '덮지 않았다');
 
     // 다시 읽으면 모델이 멈춤을 반영하고 모달은 "멈춤 풀기"를 낸다
     const again = M.findTicket(await (await f(`/api/board?w=${encodeURIComponent(key)}`)).json(), 'proj/tix');

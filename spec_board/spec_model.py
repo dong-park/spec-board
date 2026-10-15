@@ -21,8 +21,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # ── 상태 어휘 ─────────────────────────────────────────────────
@@ -53,7 +56,7 @@ WAIT_ORDER = {"막힘": 0, "보류": 1, "아직 안 함": 2}  # 기다림 칸 �
 # 사람 칸 (D3·D5). 화면은 이 칸만 쓴다.
 VERDICTS = ("", "통과", "고쳐줘")
 NODE_USER_KEYS = ("verdict", "fix")
-TICKET_USER_KEYS = ("priority", "paused", "archived")
+TICKET_USER_KEYS = ("priority", "paused", "archived", "wake")
 MAX_TEXT = 4000
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
@@ -256,14 +259,143 @@ def _read_clean(base: Path, p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
+# ── 사람 칸 저장소 (레포 밖, 이 기기 전용) ─────────────────────
+# 사람 칸(티켓 ticket.json·노드 nodes/<노드>.json = verdict·fix·comments)은 레포에 두지 않는다. 커밋되지 않고,
+# 같은 레포의 워크트리끼리 같은 파일을 본다 — 워크트리를 지우거나 main에 합쳐도 판정·댓글이 남는다.
+#   <저장소>/<레포 이름>-<git 공용 폴더 해시>/<레포 안 티켓 경로>/ticket.json · nodes/<노드>.json · .lock
+# 저장소 = $SPEC_BOARD_STORE 또는 ~/.local/share/spec-board. 레포 = `git rev-parse --git-common-dir`(워크트리 공통).
+# git이 아니면 티켓 위의 첫 `spec` 폴더의 부모가 레포다.
+_REPO_CACHE: dict[str, tuple[str, str]] = {}
+_MIGRATED: set[str] = set()
+
+
+def store_root() -> Path:
+    return Path(os.environ.get("SPEC_BOARD_STORE") or (Path.home() / ".local/share/spec-board")).expanduser()
+
+
+def _repo_of(ticket: Path) -> tuple[str, str]:
+    """(레포 키, 레포 안 티켓 경로). 워크트리가 달라도 같은 레포·같은 티켓이면 같은 값이다."""
+    t = ticket.resolve()
+    hit = _REPO_CACHE.get(str(t))
+    if hit:
+        return hit
+    ident = rel = None
+    try:
+        out = subprocess.run(["git", "-C", str(t), "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=5)
+        if out.returncode == 0 and len(out.stdout.splitlines()) >= 2:
+            top, common = (Path(x).resolve() for x in out.stdout.splitlines()[:2])
+            if t.is_relative_to(top):
+                ident, rel = common, t.relative_to(top)
+                name = common.parent.name if common.name == ".git" else common.name.removesuffix(".git")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    if ident is None:
+        parts = t.parts
+        i = parts.index("spec") if "spec" in parts else len(parts) - 1
+        root = Path(*parts[:i]) if i else t.parent
+        ident, rel, name = root, t.relative_to(root), root.name
+    key = re.sub(r"[^\w.-]+", "_", name or "repo") + "-" + hashlib.sha1(str(ident).encode()).hexdigest()[:8]
+    _REPO_CACHE[str(t)] = (key, rel.as_posix())
+    return key, rel.as_posix()
+
+
+def _write_json_atomic(f: Path, r: dict) -> None:
+    f.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=f.parent, prefix=".tmp-", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as w:
+        json.dump(r, w, ensure_ascii=False, indent=2)
+        w.write("\n")
+    os.replace(tmp, f)
+
+
+def _merge_legacy(cur: dict, old: dict) -> dict:
+    """다른 워크트리가 먼저 옮긴 칸과 합친다 — 빈 사람 칸만 채우고, 댓글은 비었을 때만, 기록은 덧붙인다."""
+    if not isinstance(cur.get("user"), dict):
+        cur["user"] = {}
+    cu = cur["user"]
+    for k, v in (old["user"].items() if isinstance(old.get("user"), dict) else []):
+        if v not in ("", None, False) and cu.get(k) in ("", None, False):
+            cu[k] = v
+    if not cur.get("comments") and isinstance(old.get("comments"), list):
+        cur["comments"] = old["comments"]
+    if isinstance(old.get("log"), list):
+        cur["log"] = [*(cur.get("log") or []), *old["log"]]
+    return cur
+
+
+def migrate_legacy(ticket: Path, local: Path) -> None:
+    """레포 안에 남은 옛 사람 칸(ticket.json·rows/nodes/*.json)을 저장소로 한 번만 옮긴다(복사). 옛 파일은 지우지 않는다.
+    워크트리마다 한 번 — 옮긴 티켓 폴더를 저장소의 .migrated에 적어 두고 다시 하지 않는다."""
+    src = str(ticket.resolve())
+    if src in _MIGRATED:
+        return
+    mark = local / ".migrated"
+    try:
+        if mark.exists() and src in mark.read_text(encoding="utf-8").splitlines():
+            _MIGRATED.add(src)
+            return
+        pairs = []
+        if clean_path(ticket, ticket / "ticket.json") and (ticket / "ticket.json").is_file():
+            pairs.append((ticket / "ticket.json", local / "ticket.json"))
+        nd = ticket / "rows" / "nodes"
+        if nd.is_dir() and clean_path(ticket, nd):
+            pairs += [(f, local / "nodes" / f.name) for f in json_files(nd, ticket) if ID_RE.match(f.stem)]
+        for a, b in pairs:
+            try:
+                old = json.loads(a.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(old, dict):
+                continue
+            if b.exists():
+                cur = json.loads(b.read_text(encoding="utf-8"))
+                old = _merge_legacy(cur if isinstance(cur, dict) else {}, old)
+            _write_json_atomic(b, old)
+        if pairs or local.exists():
+            local.mkdir(parents=True, exist_ok=True)
+            with mark.open("a", encoding="utf-8") as w:
+                w.write(src + "\n")
+    except (OSError, ValueError):
+        return   # 옮기지 못해도 보드는 뜬다 — 다음 읽기에서 다시 해 본다
+    _MIGRATED.add(src)
+
+
+def local_dir(ticket: Path) -> Path:
+    """이 티켓의 사람 칸 폴더(레포 밖). 처음 부를 때 옛 칸을 옮겨 온다."""
+    key, rel = _repo_of(ticket)
+    d = store_root() / key / rel
+    migrate_legacy(ticket, d)
+    return d
+
+
 def node_file(ticket: Path, key: str) -> Path:
     if not ID_RE.match(key):
         raise ValueError("bad id")
-    return ticket / "rows" / "nodes" / f"{key}.json"
+    return local_dir(ticket) / "nodes" / f"{key}.json"
 
 
 def ticket_file(ticket: Path) -> Path:
-    return ticket / "ticket.json"
+    return local_dir(ticket) / "ticket.json"
+
+
+def agent_file(ticket: Path) -> Path:
+    """이 시트의 담당 스레드 기록 — 사람 입력을 반영(apply·pending·wait)한 Codex 스레드. 사람 칸과 같은 저장소(레포 밖)."""
+    return local_dir(ticket) / "agent.json"
+
+
+def read_agent(ticket: Path) -> dict:
+    """{thread, since, cmd} 또는 {}. 깨진 파일·폴더 밖 파일은 없는 것으로 본다."""
+    f = agent_file(ticket)
+    if not clean_path(local_dir(ticket), f):
+        return {}
+    try:
+        j = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(j, dict) or not isinstance(j.get("thread"), str) or not j["thread"]:
+        return {}
+    return {k: str(j.get(k, "")) for k in ("thread", "since", "cmd")}
 
 
 def _user_of(f: Path, base: Path) -> dict:
@@ -291,6 +423,90 @@ def clean_node_user(patch: dict) -> dict:
     return out
 
 
+# ── 댓글 (PR 리뷰처럼 줄에 다는 대화) ─────────────────────────
+# 사람 칸 저장소 nodes/<노드>.json의 `comments` 목록. 사람(화면)과 에이전트(`node comment`)가 같은 잠금 아래 **덧붙이기만** 한다 —
+# 남의 항목을 고치지 않으니 칸 주인 규칙처럼 서로 덮지 않는다. 항목:
+#   {id: "c3", by: "user"|"agent", at, text, anchor?: {sec, text}, reply_to?: "c1", resolve?: true|false}
+# 스레드 = 뿌리(reply_to 없음) + 그 답글. 마지막 resolve 값이 해결 여부다. 해결 안 됐고 마지막 글이 사람 것이면 답을 기다린다.
+COMMENT_BY = ("user", "agent")
+COMMENT_SECS = ("why", "dec", "gwt", "check", "crit")
+MAX_COMMENTS = 500
+# 댓글에 붙는 스크린샷 — 티켓 evidence/<노드>/ 안의 cm- 로 시작하는 이미지 파일 이름만 가리킨다. 근거(evidence) 목록과 섞이지 않게 cm- 이름은 거기서 뺀다.
+COMMENT_IMAGE_RE = re.compile(r"^cm-[A-Za-z0-9_.-]{1,70}\.(png|jpe?g|webp|gif)$", re.I)
+MAX_COMMENT_IMAGES = 6
+
+
+def clean_comment(c: dict) -> dict:
+    """새 댓글 하나를 검사한다(id·by·at은 쓰는 쪽이 붙인다). 글이 있거나 resolve만 있어야 한다."""
+    if not isinstance(c, dict):
+        raise ValueError("comment는 객체여야 한다")
+    out: dict = {}
+    text = str(c.get("text", "")).strip()[:MAX_TEXT]
+    if text:
+        out["text"] = text
+    if c.get("reply_to"):
+        rid = str(c["reply_to"])
+        if not ID_RE.match(rid):
+            raise ValueError("reply_to가 이상하다")
+        out["reply_to"] = rid
+    if "resolve" in c and c["resolve"] is not None:
+        if not isinstance(c["resolve"], bool) or "reply_to" not in out:
+            raise ValueError("resolve는 참·거짓이고 reply_to(스레드)와 같이 온다")
+        out["resolve"] = c["resolve"]
+    a = c.get("anchor")
+    if a and "reply_to" not in out:
+        if not isinstance(a, dict) or a.get("sec") not in COMMENT_SECS or not str(a.get("text", "")).strip():
+            raise ValueError(f"anchor는 {{sec: {' · '.join(COMMENT_SECS)}, text}}다")
+        out["anchor"] = {"sec": a["sec"], "text": str(a["text"])[:MAX_TEXT]}
+    imgs = c.get("images")
+    if imgs:
+        if not isinstance(imgs, list) or len(imgs) > MAX_COMMENT_IMAGES or not all(isinstance(x, str) and COMMENT_IMAGE_RE.match(x) for x in imgs):
+            raise ValueError(f"images는 cm-로 시작하는 이미지 파일 이름 {MAX_COMMENT_IMAGES}개 이하다")
+        out["images"] = list(dict.fromkeys(imgs))
+    if "text" not in out and "resolve" not in out and "images" not in out:
+        raise ValueError("댓글 글이 비었다")
+    return out
+
+
+def comments_of(f: Path, base: Path) -> list[dict]:
+    """노드 칸 파일의 댓글 목록. 모양이 틀린 항목은 건너뛴다."""
+    if not f.exists() or not clean_path(base, f):
+        return []
+    try:
+        raw = json.loads(f.read_text(encoding="utf-8")).get("comments")
+    except (OSError, ValueError, AttributeError):
+        return []
+    keep = ("id", "by", "at", "text", "anchor", "reply_to", "resolve")
+    out = []
+    for c in (raw if isinstance(raw, list) else []):
+        if not (isinstance(c, dict) and c.get("id") and c.get("by") in COMMENT_BY):
+            continue
+        d = {k: c[k] for k in keep if k in c}
+        imgs = c.get("images")
+        if isinstance(imgs, list):
+            ok = [x for x in imgs if isinstance(x, str) and COMMENT_IMAGE_RE.match(x)]
+            if ok:
+                d["images"] = ok
+        out.append(d)
+    return out
+
+
+def comment_threads(comments: list[dict]) -> list[dict]:
+    """댓글 → 스레드 목록 {id, anchor, entries(글 있는 것), resolved, waiting(사람 글에 답이 없다)}."""
+    roots = [c for c in comments if not c.get("reply_to")]
+    out = []
+    for r in roots:
+        allc = [r] + [c for c in comments if c.get("reply_to") == r["id"]]
+        resolved = False
+        for c in allc:
+            if "resolve" in c:
+                resolved = bool(c["resolve"])
+        entries = [c for c in allc if c.get("text") or c.get("images")]
+        out.append({"id": r["id"], "anchor": r.get("anchor"), "entries": entries, "resolved": resolved,
+                    "waiting": not resolved and bool(entries) and entries[-1]["by"] == "user"})
+    return out
+
+
 def clean_ticket_user(patch: dict) -> dict:
     """priority는 짧은 라벨(P0…), paused는 참·거짓."""
     if not isinstance(patch, dict):
@@ -309,6 +525,10 @@ def clean_ticket_user(patch: dict) -> dict:
         if not isinstance(patch["archived"], bool):
             raise ValueError("archived는 true·false다")
         out["archived"] = patch["archived"]
+    if "wake" in patch:   # 사람이 보드에서 답하면 담당 스레드를 깨울까(board-wake D4, 기본 켬)
+        if not isinstance(patch["wake"], bool):
+            raise ValueError("wake는 true·false다")
+        out["wake"] = patch["wake"]
     return out
 
 
@@ -354,8 +574,9 @@ def board_version(root: Path) -> str:
     가장 늦은 시각만 보면 파일을 지우거나 git이 옛 시각으로 파일을 들여올 때 놓친다. 목록 전체를 본다."""
     h = hashlib.sha1()
     for _, d in sorted(find_tickets(root).items()):
-        files = [d.parent / "README.md", d / "spec.md", ticket_file(d), *brief_files(d),
-                 *json_files(d / "rows", d), *json_files(d / "rows" / "nodes", d)]
+        loc = local_dir(d)
+        files = [d.parent / "README.md", d / "spec.md", ticket_file(d), agent_file(d), *brief_files(d),
+                 *json_files(d / "rows", d), *json_files(loc / "nodes", loc)]
         for f in files:
             try:
                 st = f.stat()
@@ -479,7 +700,7 @@ def _read_ticket(slug: str, tdir: Path) -> dict:
     head = head_table(lines, BOARD_HEAD_KEYS)
     id_head = head.get("ID 머리", "").strip()
     prefix = id_head or slug.rsplit("/", 1)[-1]
-    tj = _user_of(ticket_file(tdir), tdir)
+    tj = _user_of(ticket_file(tdir), local_dir(tdir))
     warnings: list[dict] = []
     if not id_head:
         warnings.append(_warn("no-id-head", "머리 표에 ID 머리가 없다 — 슬러그로 대신한다"))
@@ -512,11 +733,11 @@ def _read_ticket(slug: str, tdir: Path) -> dict:
         deps_raw = i["deps"] if i["deps"] is not None else split_list(bhead.get("deps", ""))
         n_digits = re.match(r"^n(\d+)", i["key"])
         disp = bhead.get("id") or (f"{prefix}-{n_digits.group(1)}" if n_digits else f"{prefix}-{i['key']}")
-        user = _user_of(node_file(tdir, i["key"]), tdir) if ID_RE.match(i["key"]) else {}
+        user = _user_of(node_file(tdir, i["key"]), local_dir(tdir)) if ID_RE.match(i["key"]) else {}
         ev_path = tdir / "evidence" / i["key"] if ID_RE.match(i["key"]) else None
         ev_dir = ev_path if ev_path is not None and clean_path(tdir, ev_path) else None   # 심볼릭 링크 폴더는 목록에 올리지 않는다
         evidence = sorted(p.name for p in ev_dir.iterdir()
-                          if p.is_file() and not p.is_symlink() and not p.name.startswith(".")) if ev_dir and ev_dir.is_dir() else []
+                          if p.is_file() and not p.is_symlink() and not p.name.startswith(".") and not p.name.startswith("cm-")) if ev_dir and ev_dir.is_dir() else []
         need = bhead.get("사람 확인", "").strip()
         node = {
             "key": i["key"], "id": disp, "title": btitle, "problem": bproblem, "state": state,
@@ -524,6 +745,7 @@ def _read_ticket(slug: str, tdir: Path) -> dict:
             "deps": [_norm_dep(t, keys) for t in deps_raw], "needs_check": need.startswith("필요"),
             "verdict": str(user.get("verdict", "")), "fix": str(user.get("fix", "")), "evidence": evidence,
             "checks": bchecks, "why": bextra["why"], "criteria": bextra["criteria"], "error": err, "warnings": [],
+            "comments": comments_of(node_file(tdir, i["key"]), local_dir(tdir)) if ID_RE.match(i["key"]) else [],
         }
         if i.get("unlisted"):
             node["warnings"].append(_warn("not-in-index", "노드 인덱스 표에 없다 — /go 루프(graph.py ready)가 띄우지 않는다"))
@@ -641,6 +863,7 @@ def _read_ticket(slug: str, tdir: Path) -> dict:
         "slug": slug, "title": title_of(lines, tdir.name), "problem": head.get("문제", ""), "state": state,
         "head": head, "id_head": prefix, "priority": str(tj.get("priority", "") or head.get("우선순위", "")),
         "priority_user": str(tj.get("priority", "")), "paused": bool(tj.get("paused", False)), "archived": bool(tj.get("archived", False)),
+        "agent": read_agent(tdir), "wake": tj.get("wake") is not False,
         "counts": counts, "nodes": nodes, "rows": out_rows, "unowned": unowned, "scenarios": scen,
         "warnings": warnings + wave_warns, "error": "", "waves": waves,
     }
