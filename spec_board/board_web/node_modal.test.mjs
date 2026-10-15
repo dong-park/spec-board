@@ -499,3 +499,13 @@ test('여러 장을 한 번에 붙여도 댓글 하나에 6장을 넘지 않는�
   assert.equal(c.state.cmImages.length, 6);
 });
 
+
+test('댓글 스크린샷과 쓰고 있는 댓글의 이미지도 눌러 크게 본다', () => {
+  const m = fixture();
+  const n = { ...nodeOf(m, 'n2'), evidence: [], comments: [{ id: 'c1', by: 'agent', at: 'x', text: '찍었어요', images: ['cm-1.png'] }] };
+  const tk = m.projects[0].tickets[0];
+  assert.match(M.dialog(n, { ticket: tk, workspace: 'demo', ui: { zoom: 'cm-1.png' } }), /<div class="nm-lb" data-nm="unzoom"><img src="[^"]*name=cm-1\.png"/);
+  assert.match(M.dialog(n, { ticket: tk, workspace: 'demo', ui: { zoom: 'cm-u2.png', cmImages: ['cm-u2.png'] } }), /class="nm-lb"[\s\S]*name=cm-u2\.png/);
+  assert.doesNotMatch(M.dialog(n, { ticket: tk, workspace: 'demo', ui: { zoom: '../x.png' } }), /nm-lb/, '목록에 없는 이름은 열지 않는다');
+});
+

@@ -256,7 +256,9 @@
     const bd = BADGE[eff.state] || ['s-todo', 'todo'];
     const badge = `<span class="nm-st is-${bd[1]}"><svg class="st st-${bd[1]}" width="12" height="12" aria-hidden="true"><use href="#${bd[0]}"/></svg>` +
       `${esc(eff.pending ? `${node.state} · ${eff.pending}` : node.state)}</span>`;
-    const zoom = ui.zoom && (node.evidence || []).includes(ui.zoom)
+    // 크게 볼 수 있는 이름 — 근거 이미지, 댓글에 붙은 스크린샷, 쓰고 있는 댓글에 올린 것. 그 밖의 이름으로는 주소를 만들지 않는다
+    const zoomable = [...(node.evidence || []), ...(Array.isArray(node.comments) ? node.comments : []).flatMap((x) => (Array.isArray(x.images) ? x.images : [])), ...(ui.cmImages || [])];
+    const zoom = ui.zoom && zoomable.includes(ui.zoom)
       ? `<div class="nm-lb" data-nm="unzoom"><img src="${esc(evidenceUrl(ctx.workspace, ticket.slug, node.key, ui.zoom))}" alt="${esc(ui.zoom)}"></div>` : '';
     return `<div class="nm-scrim" data-nm="close"></div>` + zoom +
       `<section class="nm surface" role="dialog" aria-modal="true" aria-label="${esc(node.id)} ${esc(node.title)}" data-key="${esc(node.key)}">` +
