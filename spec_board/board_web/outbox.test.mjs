@@ -34,6 +34,17 @@ test('붙잡음·실패·보냄·주인 없음', () => {
   assert.equal(O.left(-3), '0:00');
 });
 
+test('✕로 닫은 줄은 숨고, 내용이 바뀌면 다시 보인다', () => {
+  const err = B({ error: 'boom' });
+  const orphan = { ws: 'z', sheet: '/r/spec/x', count: 2, reason: 'none' };
+  const v = { bundles: [err], orphans: [orphan] };
+  const ks = [...O.keys(v)];
+  assert.equal(ks.length, 2);
+  for (const k of ks) assert.ok(O.bar(v, 0, {}).includes('data-ob-dismiss="' + k + '"'));
+  assert.equal(O.bar(v, 0, {}, new Set(ks)), '');
+  assert.match(O.bar({ bundles: [B({ error: 'other' })], orphans: [{ ...orphan, count: 3 }] }, 0, {}, new Set(ks)), /other.*x 입력 3건/);
+});
+
 test('글자는 이스케이프', () => {
   assert.match(O.bar({ bundles: [B({ summary: '<b>x</b>', thread: 't"1' })] }, 0, {}), /&lt;b&gt;x&lt;\/b&gt;.*data-ob-flush="t&quot;1"/);
 });

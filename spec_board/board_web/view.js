@@ -320,7 +320,7 @@
 
   // ui = { inbox } — 어느 화면에서나 같은 틀이다. 좁은 화면 배치는 board.css가 맡는다.
   const page = (model, nav, ui) => sprite() + sidebar(model, nav, ui) + stage(model, nav, ui) + (Live && ui && ui.toast ? Live.toast(ui.toast) : '') +
-    (Ob && ui && ui.outbox ? Ob.bar(ui.outbox, Date.now() / 1000, ui.obDl) : '');
+    (Ob && ui && ui.outbox ? Ob.bar(ui.outbox, Date.now() / 1000, ui.obDl, ui.obHidden) : '');
 
   // `/api/board`는 w가 없으면 보드 없이 {workspaces:[{workspace, tickets, …}]} 목록만 준다 (성능).
   // 정적 ?src= JSON은 보드가 든 {workspaces:[…]}일 수도 있다 — 그때는 pick이 고른다.
@@ -410,6 +410,15 @@
     let nprefs = Live ? Live.load((() => { try { return localStorage.getItem(NOTIFY_KEY); } catch (e) { return null; } })()) : null;
     let ntOpen = false;   // 알림 설정 팝오버
     let obView = null, obDl = {}; // /api/outbox — 보내기 묶음과 남은 시간 마감(ms)
+    const OB_HIDDEN_KEY = 'spec-board.obHidden'; // 바에서 ✕로 닫은 줄
+    let obHidden = new Set((() => { try { return JSON.parse(localStorage.getItem(OB_HIDDEN_KEY)) || []; } catch (e) { return []; } })());
+    const saveObHidden = () => { try { localStorage.setItem(OB_HIDDEN_KEY, JSON.stringify([...obHidden])); } catch (e) { /* 이번 탭에서만 */ } };
+    const setOb = (j) => { // 받은 view에 더는 없는 줄의 닫기 키는 지운다
+      obView = j; obDl = Ob.deadlines(j, Date.now());
+      const live = Ob.keys(j), n = obHidden.size;
+      obHidden = new Set([...obHidden].filter((k) => live.has(k)));
+      if (obHidden.size !== n) saveObHidden();
+    };
     const saveNotify = () => { try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(nprefs)); } catch (e) { /* 이번 탭에서만 */ } };
     const support = () => (typeof Notification === 'undefined' ? 'no' : Notification.permission === 'denied' ? 'denied' : 'yes');
     // 지금 보이는 "새" 키와 그 시트들. 탭을 보고 있으면 아직 시계가 안 간 키의 30초를 시작한다
@@ -433,7 +442,7 @@
       const fr = freshNow();
       const html = page(model, parseHash(location.hash), { inbox: inbox && inbox.view(), glob, repo: repoF, waves, tix, sheets, repos, prefs, pop, q: sq, doneOpen, today: localDay(),
         fresh: fr.keys, freshSheets: fr.sheetsNew, live, toast, notify: nprefs && { prefs: nprefs, open: ntOpen, support: support() },
-        outbox: obView, obDl });
+        outbox: obView, obDl, obHidden });
       if (html === last) return;
       const route = location.hash;
       const keep = route === lastRoute;
@@ -477,8 +486,8 @@
       .then((j) => { if (j.projects) { glob = toGlobal(j); onInbox(); draw(); } }).catch(() => {}));
     // 보내기 묶음 — 사람이 답한 것이 언제 어느 스레드로 가는지
     const loadOutbox = () => (q.get('src') || !Ob ? Promise.resolve() : getJson('/api/outbox')
-      .then((j) => { obView = j; obDl = Ob.deadlines(j, Date.now()); draw(); }).catch(() => {}));
-    const obPost = (body) => postJson('/api/outbox', body).then((r) => { if (r.json && r.json.bundles) { obView = r.json; obDl = Ob.deadlines(r.json, Date.now()); } draw(); }).catch(() => {});
+      .then((j) => { setOb(j); draw(); }).catch(() => {}));
+    const obPost = (body) => postJson('/api/outbox', body).then((r) => { if (r.json && r.json.bundles) setOb(r.json); draw(); }).catch(() => {});
     // 남은 시간 글자만 1초마다 — 다시 그리지 않는다. 0이 되면 서버가 보냈을 테니 한 번 다시 받는다
     if (Ob) setInterval(() => {
       let due = false;
@@ -594,6 +603,7 @@
       if (c('[data-toast-go]')) { toast = null; location.hash = '#inbox'; return draw(); }
       if (c('[data-toast-x]')) { toast = null; return draw(); }
       let ob;
+      if ((ob = c('[data-ob-dismiss]'))) { obHidden.add(ob.getAttribute('data-ob-dismiss')); saveObHidden(); return draw(); }
       if ((ob = c('[data-ob-flush]'))) return void obPost({ action: 'flush', thread: ob.getAttribute('data-ob-flush') });
       if ((ob = c('[data-ob-hold]'))) return void obPost({ action: 'hold', thread: ob.getAttribute('data-ob-hold') });
       if ((ob = c('[data-ob-release]'))) return void obPost({ action: 'release', thread: ob.getAttribute('data-ob-release') });

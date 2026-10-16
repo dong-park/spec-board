@@ -29,32 +29,47 @@
     return names.slice(0, 3).join(', ') + (names.length > 3 ? ' 외 ' + (names.length - 3) + '개' : '');
   }
 
-  /* 바 HTML. nowSec = 지금(초), dl = deadlines(). 보일 것이 없으면 ''. */
-  function bar(view, nowSec, dl) {
+  // 닫기(✕) 키 — 내용이 바뀌면(새 오류·건수 변화) 키도 바뀌어 다시 보인다
+  const keyOf = (b) => b.error ? 'e|' + b.thread + '|' + b.error : 's|' + b.thread + '|' + b.sent_at;
+  const orphanKey = (o) => 'o|' + (o.ws || '') + '|' + o.sheet + '|' + o.count + '|' + o.reason;
+  const xBtn = (k) => '<button type="button" class="ob-x" data-ob-dismiss="' + esc(k) + '" aria-label="닫기">✕</button>';
+
+  /* 바 HTML. nowSec = 지금(초), dl = deadlines(), hidden = 닫은 키 Set. 보일 것이 없으면 ''. */
+  function bar(view, nowSec, dl, hidden) {
     if (!view) return '';
+    const shown = (k) => !(hidden && hidden.has(k));
     const rows = [];
     for (const b of view.bundles || []) {
       const who = '<span class="ob-t" title="' + esc(b.thread) + '">스레드 ' + esc(short(b.thread)) + '</span>';
       const sum = esc(b.summary || '') + ' · ' + esc(sheetsOf(b));
       const btn = (attr, label, pri) => '<button type="button" class="' + (pri ? 'btn-primary' : 'obb') + '" ' + attr + '="' + esc(b.thread) + '">' + label + '</button>';
       if (b.state === 'waiting' && b.error) {
-        rows.push('<div class="ob is-err">' + who + '<span class="ob-m">보내지 못했어요 — ' + esc(b.error) + ' · ' + sum + '</span>' + btn('data-ob-flush', '다시 보내기', true) + '</div>');
+        if (shown(keyOf(b))) rows.push('<div class="ob is-err">' + who + '<span class="ob-m">보내지 못했어요 — ' + esc(b.error) + ' · ' + sum + '</span>' + btn('data-ob-flush', '다시 보내기', true) + xBtn(keyOf(b)) + '</div>');
       } else if (b.state === 'waiting' && b.held) {
         rows.push('<div class="ob">' + who + '<span class="ob-m">에이전트에게 보낼 ' + sum + ' · 붙잡음</span>' + btn('data-ob-release', '풀기') + btn('data-ob-flush', '지금 보내기', true) + '</div>');
       } else if (b.state === 'waiting' || b.state === 'sending') {
         const t = dl && dl[b.thread];
         const when = b.state === 'sending' ? '보내는 중…' : '<span data-ob-left="' + (t || '') + '">' + left(t ? (t / 1000 - nowSec) : b.left || 0) + '</span> 뒤 보냄';
         rows.push('<div class="ob">' + who + '<span class="ob-m">에이전트에게 보낼 ' + sum + ' · ' + when + '</span>' + btn('data-ob-hold', '붙잡기') + btn('data-ob-flush', '지금 보내기', true) + '</div>');
-      } else if ((b.state === 'sent' || b.state === 'merged') && b.sent_at && nowSec - b.sent_at < SENT_SHOW) {
-        rows.push('<div class="ob is-sent">' + who + '<span class="ob-m">' + (b.state === 'merged' ? '앞서 보낸 깨우기에 합침' : '보냄') + ' · ' + hhmm(b.sent_at) + ' · ' + sum + '</span></div>');
+      } else if ((b.state === 'sent' || b.state === 'merged') && b.sent_at && nowSec - b.sent_at < SENT_SHOW && shown(keyOf(b))) {
+        rows.push('<div class="ob is-sent">' + who + '<span class="ob-m">' + (b.state === 'merged' ? '앞서 보낸 깨우기에 합침' : '보냄') + ' · ' + hhmm(b.sent_at) + ' · ' + sum + '</span>' + xBtn(keyOf(b)) + '</div>');
       }
     }
     for (const o of view.orphans || []) {
+      if (!shown(orphanKey(o))) continue;
       rows.push('<div class="ob is-off"><span class="ob-m">' + esc(tail(o.sheet)) + ' 입력 ' + o.count + '건 — ' +
-        (o.reason === 'off' ? '이 시트는 깨우기를 꺼 두어 보내지 않아요' : '담당 스레드가 없어 보내지 않아요. 메인 스레드가 spec-board pending을 부르면 생겨요') + '</span></div>');
+        (o.reason === 'off' ? '이 시트는 깨우기를 꺼 두어 보내지 않아요' : '담당 스레드가 없어 보내지 않아요. 메인 스레드가 spec-board pending을 부르면 생겨요') + '</span>' + xBtn(orphanKey(o)) + '</div>');
     }
     return rows.length ? '<div class="obar" role="status">' + rows.join('') + '</div>' : '';
   }
 
-  return { bar, deadlines, left, SENT_SHOW };
+  /* 지금 view에 있는 닫기 키 전부 — 사라진 줄의 키를 저장소에서 지울 때 쓴다 */
+  function keys(view) {
+    const out = new Set();
+    for (const b of (view && view.bundles) || []) if (b.error || b.sent_at) out.add(keyOf(b));
+    for (const o of (view && view.orphans) || []) out.add(orphanKey(o));
+    return out;
+  }
+
+  return { bar, deadlines, keys, left, SENT_SHOW };
 });

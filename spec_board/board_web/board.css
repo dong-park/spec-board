@@ -421,6 +421,8 @@ a.where:hover { background: var(--active); color: var(--text-1); }
 .ob .ob-t { flex: none; font-family: var(--font-mono); color: var(--text-3); }
 .ob .obb { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--chip); color: var(--text-1); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
 .ob .btn-primary { flex: none; height: 26px; padding: 0 12px; font-size: var(--fs-sm); }
+.ob .ob-x { flex: none; border: 0; background: none; padding: 0 2px; color: var(--text-3); font: inherit; cursor: pointer; }
+.ob .ob-x:hover { color: var(--text-1); }
 .ob.is-err .ob-m { color: var(--st-err); }
 .ob.is-sent, .ob.is-off { opacity: .8; }
 [data-ob-left] { font-family: var(--font-mono); color: var(--text-1); }
