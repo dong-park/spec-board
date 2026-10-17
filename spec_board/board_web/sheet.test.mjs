@@ -137,3 +137,18 @@ test('결정 탭(#sd/): 탭 줄에 답할 수, 본문은 decMenu, 흐름 전용 
   assert.match(Sheet.page(ticket, model, {}, null, { ...ui, tab: 'dec' }), /이 시트에는 결정이 없어요/);
 });
 
+
+test('깨우기 줄: 문맥이 크고 웨이브가 없을 때만 릴레이 요청 버튼, 웨이브 중이면 막고 작으면 크기만', () => {
+  const t = { ...ticket, agent: { thread: '01a1main-thread' } };
+  const page = (o) => Sheet.page(t, model, {}, null, { ...ui, owners: [{ thread: '01a1main-thread', sheets: [], ...o }] });
+  const big = page({ tokens: 450000, running: false, relay: true });
+  assert.match(big, /class="mono ctx big"[^>]*>문맥 45만</);
+  assert.match(big, /data-relay="a\|crm"[^>]*>릴레이 요청</);
+  const busy = page({ tokens: 450000, running: true, relay: false });
+  assert.ok(!busy.includes('data-relay'), '웨이브가 돌면 버튼이 없다');
+  assert.match(busy, /웨이브 중/);
+  const small = page({ tokens: 80000, running: false, relay: false });
+  assert.match(small, /문맥 8만/);
+  assert.ok(!small.includes('data-relay') && !small.includes('ctx big'));
+  assert.ok(!Sheet.page(t, model, {}, null, { ...ui, owners: [] }).includes('문맥 '), '크기를 모르면 아무것도 안 그린다');
+});

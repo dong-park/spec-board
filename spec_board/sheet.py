@@ -884,13 +884,21 @@ def pending_wake_items(sheet: Path) -> list[tuple[str, str]]:
 
 def owners(reg: "Registry") -> list[dict]:
     """담당으로 기록된 스레드와 그 시트들 — 사이트에서 담당 없는 시트에 고를 목록."""
+    from ctxwatch import RELAY_AT, context_tokens, wave_running   # 문맥 크기와 웨이브 유무 — 릴레이 권장(board-wake D7)
     by: dict[str, list] = {}
+    running: set[str] = set()
     for key, root in reg.roots().items():
         for slug, d in sorted(find_tickets(root).items()):
             t = read_agent(d).get("thread")
             if t:
                 by.setdefault(t, []).append({"ws": key, "slug": slug})
-    return [{"thread": t, "sheets": s} for t, s in sorted(by.items(), key=lambda x: -len(x[1]))]
+                if wave_running(d):
+                    running.add(t)
+    out = []
+    for t, s in sorted(by.items(), key=lambda x: -len(x[1])):
+        tokens = context_tokens(t)
+        out.append({"thread": t, "sheets": s, "tokens": tokens, "running": t in running, "relay": bool(tokens and tokens >= RELAY_AT and t not in running)})
+    return out
 
 
 def set_owner(sheet: Path, thread: str) -> None:
@@ -911,6 +919,14 @@ def make_handler(reg: Registry, hosts: set[str] | None = None, outbox=None):
         outbox = Outbox(wake_owner, lambda t: wake_todo(reg, t), pending_of=lambda s: bool(user_items(s)))
         from wavewatch import WaveWatch   # 죽은 웨이브를 heartbeat 대신 서버가 본다(board-wake D6)
         WaveWatch(lambda: [d for root in reg.roots().values() for d in find_tickets(root).values()], wake_owner).start()
+        from ctxwatch import RelayWatch   # 문맥이 크고 웨이브가 없으면 보드가 스스로 릴레이를 요청한다(board-wake D7=B)
+        def _wake_on(o):
+            for sl in o["sheets"]:
+                d = find_tickets(reg.roots().get(sl["ws"], Path("/nonexistent"))).get(sl["slug"])
+                if d is None or not wake_owner(d)[1]:
+                    return False
+            return True
+        RelayWatch(lambda: owners(reg), _wake_on).start()
     outbox.notify = lambda: hub.poke("outbox")
 
     class H(BaseHTTPRequestHandler):
@@ -1184,11 +1200,28 @@ def make_handler(reg: Registry, hosts: set[str] | None = None, outbox=None):
                         if not to:
                             raise ValueError("담당 스레드가 없거나 깨우기가 꺼져 있어요")
                         return self.send(200, {"ok": True, "bundle": outbox.flush(to), **outbox.view(), "owners": owners(reg)})
+                    if act == "relay":   # 릴레이 요청 — 담당 스레드에 "넘겨 줘" 메시지. 웨이브가 도는 중이면 막는다(WAVE-DONE이 옛 스레드로 감)
+                        from ctxwatch import context_tokens, relay_message, wave_running
+                        ticket = find_tickets(self.ws(str(req.get("ws", "")))).get(str(req.get("sheet", "")))
+                        if ticket is None:
+                            raise KeyError(f"ticket {req.get('sheet')}")
+                        to = read_agent(ticket).get("thread", "")
+                        if not to:
+                            raise ValueError("담당 스레드가 없어요")
+                        busy = [s for _, s in find_tickets(self.ws(str(req.get("ws", "")))).items() if read_agent(s).get("thread") == to and wave_running(s)]
+                        if busy:
+                            raise ValueError("웨이브가 돌고 있어요 — 끝난 뒤에 요청하세요")
+                        if outbox.queued(to):
+                            raise ValueError("보드가 보낸 메시지가 아직 대기열에 있어요")
+                        ok, info = outbox.send(to, relay_message(to, str(req.get("sheet", "")), context_tokens(to)))
+                        if not ok:
+                            raise ValueError(info)
+                        return self.send(200, {"ok": True, "info": info, **outbox.view(), "owners": owners(reg)})
                     if act == "flush":
                         return self.send(200, {"ok": True, "bundle": outbox.flush(thread), **outbox.view()})
                     if act in ("hold", "release"):
                         return self.send(200 if outbox.hold(thread, act == "hold") else 404, {"ok": True, **outbox.view()})
-                    raise ValueError("action은 flush·hold·release다")
+                    raise ValueError("action은 flush·hold·release·nudge·relay다")
                 root = self.ws(m.group(1))
                 kind = wake_kind(m.group(2), req)
                 if m.group(2) == "user":

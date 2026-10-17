@@ -428,7 +428,9 @@ a.where:hover { background: var(--active); color: var(--text-1); }
 [data-ob-left] { font-family: var(--font-mono); color: var(--text-1); }
 .pwake { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
 .pwake .mono { white-space: nowrap; }
-.wk.nudge, select.wk { white-space: nowrap; }
+.wk.nudge, .wk.relay, select.wk { white-space: nowrap; }
+.ctx { font-size: 12px; opacity: .75; }
+.ctx.big { opacity: 1; font-weight: 600; }
 .pwake a { color: var(--text-2); text-decoration: none; }
 .pwake a:hover { color: var(--text-1); text-decoration: underline; }
 .wk { height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--chip); color: var(--text-3); font: inherit; font-size: var(--fs-sm); cursor: pointer; }

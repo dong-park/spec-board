@@ -624,6 +624,15 @@
         else if (res.json && res.json.error) window.alert(res.json.error);
         return draw();
       }
+      const rl = c('[data-relay]');
+      if (rl) { // 릴레이 요청 — 서버가 담당 스레드에 넘겨 달라는 메시지를 보낸다(웨이브가 돌면 서버가 막는다)
+        const [ws, slug] = rl.getAttribute('data-relay').split('|');
+        rl.disabled = true;
+        const res = await postJson('/api/outbox', { action: 'relay', ws, sheet: slug }).catch(() => ({ json: {} }));
+        if (res.json && res.json.bundles) { obView = res.json; obDl = Ob.deadlines(res.json, Date.now()); rl.textContent = '요청함'; }
+        else if (res.json && res.json.error) window.alert(res.json.error);
+        return draw();
+      }
       const row = c('.irow[data-in]');
       if (row && fresh.size) {
         const d = row.dataset;

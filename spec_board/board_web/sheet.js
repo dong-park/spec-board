@@ -202,8 +202,14 @@
       (t.nodes || []).filter((n) => n.state === '확인 대기' && (n.verdict === '통과' || n.verdict === '고쳐줘')).length;
     const nudge = a.thread && on && waiting
       ? '<button type="button" class="wk nudge" data-nudge="' + esc(ws + '|' + t.slug) + '" title="담당 스레드를 지금 깨워 반영하게 해요">반영 대기 ' + waiting + '건 보내기</button>' : '';
+    // 문맥 — 담당 스레드가 읽는 문맥 크기. 크고 웨이브가 없으면 릴레이를 요청할 수 있다(board-wake D7)
+    const own = (ui.owners || []).find((o) => a.thread && o.thread === a.thread) || {};
+    const ctx = own.tokens ? '<span class="mono ctx' + (own.relay ? ' big' : '') + '" title="담당 스레드가 호출마다 읽는 문맥">문맥 ' + Math.round(own.tokens / 10000) + '만</span>' : '';
+    const relay = own.relay
+      ? '<button type="button" class="wk relay" data-relay="' + esc(ws + '|' + t.slug) + '" title="담당 스레드에 릴레이(새 스레드로 넘기기)를 요청해요. 웨이브가 없을 때만 보여요">릴레이 요청</button>'
+      : (own.tokens && own.running ? '<span class="mono ctx" title="웨이브가 끝난 뒤에 넘길 수 있어요">웨이브 중</span>' : '');
     return '<span>깨우기</span><span class="pwake">' + who +
-      '<button type="button" class="wk' + (on ? ' on' : '') + '" data-wake="' + esc(ws + '|' + t.slug + '|' + (on ? '0' : '1')) + '" aria-pressed="' + on + '">' + (on ? '켬' : '끔') + '</button>' + nudge + '</span>';
+      '<button type="button" class="wk' + (on ? ' on' : '') + '" data-wake="' + esc(ws + '|' + t.slug + '|' + (on ? '0' : '1')) + '" aria-pressed="' + on + '">' + (on ? '켬' : '끔') + '</button>' + nudge + ctx + relay + '</span>';
   }
 
   // 담당 정하기 — 다른 시트를 맡고 있는 스레드 중에서 고른다(ui.owners = /api/outbox의 owners)

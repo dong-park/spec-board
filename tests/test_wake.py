@@ -329,5 +329,91 @@ class SiteNudgeAndOwner(Tmp):
         self.assertIn("보드 입력 2건(결정 1 · 통과 1)", sent[0][1], "답만 있는 D2는 빼고 반영 대기 둘만")
 
 
+class ContextRelay(Tmp):
+    """D7 — 담당 스레드 문맥이 크고 웨이브가 없을 때만 보드에서 릴레이를 요청할 수 있다."""
+
+    def setUp(self):
+        super().setUp()
+        home = self.tmp / "codex-home"; d = home / "sessions" / "2026" / "10" / "17"; d.mkdir(parents=True)
+        self.th = "01a139c2-177e-main"
+        line = lambda n: json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": n}}}})
+        (d / f"rollout-2026-10-17T00-00-00-{self.th}.jsonl").write_text(line(120000) + "\n" + json.dumps({"type": "x"}) + "\n" + line(450000) + "\n", encoding="utf-8")
+        env = mock.patch.dict(os.environ, {"CODEX_HOME": str(home)}); env.start(); self.addCleanup(env.stop)
+
+    def test_tokens_come_from_the_last_call_and_missing_thread_is_none(self):
+        import ctxwatch
+        self.assertEqual(ctxwatch.context_tokens(self.th), 450000)
+        self.assertIsNone(ctxwatch.context_tokens("01a1none-none-none"))
+
+    def test_relay_request_is_blocked_while_a_wave_runs_and_sent_once_otherwise(self):
+        import threading, urllib.request, urllib.error
+        from http.server import ThreadingHTTPServer
+        import outbox
+        conf = mock.patch.object(sheet, "CONF", self.tmp / "no-roots"); conf.start(); self.addCleanup(conf.stop)
+        self.addCleanup(sheet._SHEETS.clear)
+        r = Repo(self.tmp); r.node("n1", "진행"); r.row("D1", "decision"); r.write_spec()
+        sheet.set_owner(r.dir, self.th)
+        sent = []
+        reg = sheet.Registry([self.tmp])
+        ob = outbox.Outbox(sheet.wake_owner, lambda t: 0, send=lambda t, m: (sent.append((t, m)) or (True, "Queued")), queued=lambda t: False)
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), sheet.make_handler(reg, outbox=ob))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        ws = next(iter(reg.roots()))
+
+        def post(path, body):
+            q = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"})
+            try:
+                return 200, json.load(urllib.request.urlopen(q))
+            except urllib.error.HTTPError as e:
+                return e.code, json.load(e)
+
+        own = json.load(urllib.request.urlopen(base + "/api/outbox"))["owners"][0]
+        self.assertEqual((own["tokens"], own["running"], own["relay"]), (450000, False, True))
+        (r.dir / ".wave").write_text("01a1wave-aaaa\n")
+        own = json.load(urllib.request.urlopen(base + "/api/outbox"))["owners"][0]
+        self.assertEqual((own["running"], own["relay"]), (True, False), "웨이브가 돌면 권하지 않는다")
+        code, j = post("/api/outbox", {"action": "relay", "ws": ws, "sheet": r.slug})
+        self.assertEqual((code, sent), (400, []), "웨이브가 돌면 서버가 막는다")
+        (r.dir / ".wave").write_text("")
+        code, j = post("/api/outbox", {"action": "relay", "ws": ws, "sheet": r.slug})
+        self.assertEqual((code, len(sent)), (200, 1))
+        self.assertEqual(sent[0][0], self.th)
+        self.assertIn("45만 토큰", sent[0][1])
+        self.assertIn(f"target_thread_id가 {self.th}", sent[0][1])
+        self.assertIn(f"spec-board apply spec/{r.slug}", sent[0][1])
+
+
+class RelayWatchRules(unittest.TestCase):
+    """D7=B — 보드가 조건이 모두 맞을 때만 스스로 릴레이를 요청하고, 같은 스레드에는 한 시간에 한 번만."""
+
+    def make(self, **o):
+        import ctxwatch
+        base = {"thread": "T1", "tokens": 200000, "running": False, "relay": True, "sheets": [{"ws": "w", "slug": "s1"}]}
+        base.update({k: v for k, v in o.items() if k in base})
+        self.sent, self.now = [], 10000.0
+        def send(t, m):
+            self.sent.append((t, m))
+            return (True, "Queued")
+        return ctxwatch.RelayWatch(lambda: [base], lambda _o: o.get("wake", True), send=send,
+                                   queued=lambda t: o.get("queued", False), clock=lambda: self.now, mtime=lambda t: self.now - o.get("idle", 600),
+                                   quiet=90, again=3600)
+
+    def test_all_conditions_met_sends_once_with_auto_wording_then_waits_an_hour(self):
+        w = self.make()
+        self.assertEqual(w.tick(), ["T1"])
+        self.assertIn("자동 릴레이", self.sent[0][1])
+        self.assertIn("spec/s1/relay.md", self.sent[0][1])
+        self.assertEqual(w.tick(), [], "같은 스레드는 한 시간 안에 다시 안 보낸다")
+        self.now += 3601
+        self.assertEqual(w.tick(), ["T1"], "한 시간 뒤에도 그대로면 다시")
+
+    def test_each_missing_condition_blocks(self):
+        for kw in ({"relay": False}, {"idle": 30}, {"queued": True}, {"wake": False}, {"sheets": []}):
+            w = self.make(**kw)
+            self.assertEqual(w.tick(), [], kw)
+        self.assertEqual(self.sent, [])
+
 if __name__ == "__main__":
     unittest.main()
