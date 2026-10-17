@@ -67,6 +67,67 @@ class ThreadRecord(Tmp):
         run("pending", self.sheet, thread="../../etc")
         self.assertEqual(self.agent()["thread"], "01a1ffff-relay")
 
+    def test_pending_and_wait_by_other_thread_keep_the_owner_but_fill_an_empty_one(self):
+        run("pending", self.sheet, thread="01a13d24-main")              # 담당이 없으면 pending도 기록한다
+        self.assertEqual(self.agent()["thread"], "01a13d24-main")
+        run("pending", self.sheet, thread="01a1aaaa-peek")              # 상태 확인용 채팅
+        run("wait", self.sheet, "--timeout", "0", thread="01a1bbbb-peek")
+        self.assertEqual(self.agent()["thread"], "01a13d24-main", "읽기 확인은 담당을 바꾸지 않는다")
+        run("apply", self.sheet, thread="01a1cccc-newmain")             # 입력을 가져가는 apply만 바꾼다
+        self.assertEqual(self.agent()["thread"], "01a1cccc-newmain")
+
+
+class WaveWatchRules(Tmp):
+    """D6=B — 잠금이 남은 웨이브의 세션 기록이 STALL 넘게 조용하면 담당 스레드를 한 번 깨운다."""
+
+    def make(self, mtime, owner=("T1", True), queued=False, send_ok=True):
+        import wavewatch
+        self.sent = []
+        self.now = 10000.0
+        def send(t, m):
+            self.sent.append((t, m))
+            return (send_ok, "Queued message x")
+        d = Path(self.tmp) / "spec" / "s1"
+        d.mkdir(parents=True, exist_ok=True)
+        self.d = d
+        return wavewatch.WaveWatch(lambda: [d], lambda s: owner, send=send, queued=lambda t: queued,
+                                   clock=lambda: self.now, mtime=lambda w: mtime(self), stall=1200)
+
+    def test_quiet_wave_wakes_owner_once_and_message_names_the_wave(self):
+        w = self.make(lambda s: s.now - 1500)
+        (self.d / ".wave").write_text("01a1wave-aaaa\n")
+        self.assertEqual(w.tick(), ["01a1wave-aaaa"])
+        self.assertEqual(w.tick(), [], "같은 웨이브는 다시 안 보낸다")
+        self.assertEqual(self.sent[0][0], "T1")
+        self.assertIn("01a1wave-aaaa", self.sent[0][1])
+        self.assertIn("25분째", self.sent[0][1])
+
+    def test_nothing_to_send_when_alive_empty_lock_no_owner_or_wake_off(self):
+        w = self.make(lambda s: s.now - 60)              # 최근에 움직였다
+        (self.d / ".wave").write_text("01a1wave-aaaa\n")
+        self.assertEqual(w.tick(), [])
+        (self.d / ".wave").write_text("")                # 잠금이 비었다 = 웨이브가 정상으로 끝났다
+        w2 = self.make(lambda s: s.now - 5000)
+        (self.d / ".wave").write_text("")
+        self.assertEqual(w2.tick(), [])
+        for owner in (("", True), ("T1", False)):
+            w3 = self.make(lambda s: s.now - 5000, owner=owner)
+            (self.d / ".wave").write_text("01a1wave-aaaa\n")
+            self.assertEqual(w3.tick(), [])
+        self.assertEqual(self.sent, [])
+
+    def test_new_wave_after_stall_is_told_again_and_failed_send_retries(self):
+        w = self.make(lambda s: s.now - 5000, send_ok=False)
+        (self.d / ".wave").write_text("01a1wave-aaaa\n")
+        self.assertEqual(w.tick(), [])
+        self.assertEqual(w.tick(), [], "보내기에 실패하면 told에 안 넣고 다음 틱에 다시")
+        self.assertEqual(len(self.sent), 2)
+        w.send = lambda t, m: (True, "ok")
+        self.assertEqual(w.tick(), ["01a1wave-aaaa"])
+        (self.d / ".wave").write_text("01a1wave-bbbb\n")
+        self.assertEqual(w.tick(), ["01a1wave-bbbb"])
+
+
 class WakeMessage(unittest.TestCase):
     """n2 — 묶음 하나를 메시지 한 줄로. 같은 항목을 여러 번 바꾸면 한 건."""
 

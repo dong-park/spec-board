@@ -349,13 +349,16 @@ THREAD_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z_-]{7,63}$")
 
 def record_agent(sheet: Path, cmd: str) -> bool:
     """사람 입력을 반영하는 명령(apply·pending·wait)을 부른 Codex 스레드를 이 시트의 담당으로 남긴다(board-wake D3).
-    운영 기록에서 반영은 늘 오래 사는 메인 스레드가 했다 — 웨이브 스레드의 node review·block은 기록을 바꾸지 않는다.
+    운영 기록에서 반영은 늘 오래 사는 메인 스레드가 했다. 담당이 이미 있으면 apply만 바꾼다(pending·wait는 담당이 없을 때만 기록) — 웨이브 스레드의 node review·block은 기록을 바꾸지 않는다.
     스레드가 바뀔 때만 쓴다(heartbeat가 10분마다 pending을 불러도 보드 버전이 그대로다). CODEX_THREAD_ID가 없으면 아무것도 안 한다."""
     tid = os.environ.get("CODEX_THREAD_ID", "").strip()
     if not THREAD_RE.match(tid):
         return False
     try:
-        if read_agent(sheet).get("thread") == tid:
+        cur = read_agent(sheet).get("thread", "")
+        if cur == tid:
+            return False
+        if cur and cmd != "apply":   # 읽기 확인(pending·wait)은 있는 담당을 바꾸지 않는다(board-wake D5). 입력을 가져가는 apply만 바꾼다
             return False
         with locked(sheet):
             f = agent_file(sheet)
@@ -906,6 +909,8 @@ def make_handler(reg: Registry, hosts: set[str] | None = None, outbox=None):
     if outbox is None:
         from outbox import Outbox
         outbox = Outbox(wake_owner, lambda t: wake_todo(reg, t), pending_of=lambda s: bool(user_items(s)))
+        from wavewatch import WaveWatch   # 죽은 웨이브를 heartbeat 대신 서버가 본다(board-wake D6)
+        WaveWatch(lambda: [d for root in reg.roots().values() for d in find_tickets(root).values()], wake_owner).start()
     outbox.notify = lambda: hub.poke("outbox")
 
     class H(BaseHTTPRequestHandler):
